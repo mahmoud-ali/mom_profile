@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+db.sqlite3
+media/
+.env
+.DS_Store
+.~lock.*#
+

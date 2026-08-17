@@ -1,0 +1,110 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls app_fields %}
+
+{% block after_field_sets %}
+  {{ block.super }}
+  {% if dynamic_fields or attachment_fields or detail_rows %}
+  <fieldset class="module aligned">
+    <h2>استمارة الطلب — {{ app_type.arabic_name }}</h2>
+
+    <style>
+      .dyn-field-grid .fieldBox { margin: 0 0 10px 0; }
+      .dyn-field-grid .fieldBox input[type="text"],
+      .dyn-field-grid .fieldBox input[type="date"],
+      .dyn-field-grid .fieldBox input[type="number"],
+      .dyn-field-grid .fieldBox select,
+      .dyn-field-grid .fieldBox textarea {
+        width: 100%;
+        box-sizing: border-box;
+      }
+    </style>
+
+    {% if field_groups or ungrouped_fields %}
+      <h3>حقول الاستمارة</h3>
+      {% for group in field_groups %}
+        {% if group.title %}<h4>{{ group.title }}</h4>{% endif %}
+        <div class="form-row dyn-field-grid" style="display:flex;flex-wrap:wrap;gap:10px 2%;align-items:flex-start">
+          {% for label, name in group.fields %}
+            <div class="fieldBox" style="box-sizing:border-box;{% if group.columns > 1 %}width:calc((100% - 2%)/{{ group.columns }}){% else %}width:100%{% endif %}">
+              {% with field=adminform.form|field_by_name:name %}
+                <label for="{{ field.id_for_label }}">{{ label }}:</label>
+                {{ field }}
+                {{ field.errors }}
+              {% endwith %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+      {% if ungrouped_fields %}
+        <div class="form-row dyn-field-grid" style="display:flex;flex-wrap:wrap;gap:10px 2%;align-items:flex-start">
+          {% for label, name in ungrouped_fields %}
+            <div class="fieldBox" style="box-sizing:border-box;{% if field_columns > 1 %}width:calc((100% - 2%)/{{ field_columns }}){% else %}width:100%{% endif %}">
+              {% with field=adminform.form|field_by_name:name %}
+                <label for="{{ field.id_for_label }}">{{ label }}:</label>
+                {{ field }}
+                {{ field.errors }}
+              {% endwith %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endif %}
+
+    {% if attachment_fields %}
+      <h3>المرفقات</h3>
+      <div class="form-row dyn-field-grid" style="display:flex;flex-wrap:wrap;gap:10px 2%;align-items:flex-start">
+        {% for label, name in attachment_fields %}
+          <div class="fieldBox" style="box-sizing:border-box;{% if attachment_columns > 1 %}width:calc((100% - 2%)/{{ attachment_columns }}){% else %}width:100%{% endif %}">
+            {% with field=adminform.form|field_by_name:name %}
+              <label for="{{ field.id_for_label }}">{{ label }}:</label>
+              {% with existing=existing_attachments|dict_get:label %}
+                {% if existing %}
+                  <div style="margin-bottom:4px">
+                    الملف الحالي:
+                    <a href="{{ existing.file.url }}" target="_blank" rel="noopener">{{ existing.file.name }}</a>
+                    {% if existing.file.size %} ({{ existing.file.size|filesizeformat }}){% endif %}
+                  </div>
+                {% endif %}
+              {% endwith %}
+              {{ field }}
+              {{ field.errors }}
+            {% endwith %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if detail_rows %}
+      <h3>التفاصيل</h3>
+      <table class="tabular" style="width:100%">
+        <thead>
+          <tr>
+            {% if detail_rows.0.cat %}<th>التصنيف</th>{% endif %}
+            {% for col_label, bound in detail_rows.0.cols %}<th>{{ col_label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in detail_rows %}
+            <tr>
+              {% if row.cat %}<td>{{ row.cat }}</td>{% endif %}
+              {% for col_label, bound in row.cols %}<td>{{ bound }}</td>{% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="help" style="clear:both">
+        اترك الصف الأخير فارغاً إذا لم تكن هناك حاجة له — كل حفظ يضيف صفاً فارغاً جديداً للبنود الإضافية.
+      </p>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+{% endblock %}
+
+{% block submit_buttons_bottom %}
+  {{ block.super }}
+  {% if show_submit %}
+    <div class="submit-row" style="margin-top:6px">
+      <input type="submit" value="تأكيد الطلب" name="_submit_app" style="float:right">
+    </div>
+  {% endif %}
+{% endblock %}

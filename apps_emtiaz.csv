@@ -1,0 +1,24 @@
+﻿url_name,model_name,verbose_name,arabic_name,attachments_arabic,form_fields_arabic,detail_models_arabic,detail_fields_arabic
+app_work_plan_list,AppWorkPlan,Application: Work Plan,طلب خطة عمل,خطاب رسمي من الشركة، ملف خطة العمل,بداية الخطة، نهاية الخطة، تعليق على الخطة,,
+app_technical_financial_report_list,AppTechnicalFinancialReport,Application: Technical & Financial Report,طلب تقرير فني ومالي,ملف التقرير، ملف المرفقات الاخرى,بداية التقرير، نهاية التقرير، نوع التقرير، Covering letter,,
+app_change_company_name_list,AppChangeCompanyName,Application: Company Name Change,طلب تغيير اسم شركة,شهادة تأسيس، عقد تأسيس، شهادة ش7، لائحة النظام الاساسي، اخطار تغيير الاسم,الاسم الجديد، سبب التغيير,,
+app_exploration_time_list,AppExplorationTime,Application: Exploration Time,طلب اعتماد مواقيت الاستكشاف,ملف مسببات تغير المواقيت,بداية مدة الاستكشاف، نهاية مدة الاستكشاف، اسباب اعتماد المواقيت,,
+app_add_area_list,AppAddArea,Application: Add Area,طلب اضافة مساحة,احداثيات المساحة المضافة,المساحة بالكم2، اسباب الاضافة,,
+app_remove_area_list,AppRemoveArea,Application: Remove Area,طلب تنازل عن مساحة,احداثيات المساحة المراد التنازل عنها، احداثيات المساحة المراد الاحتفاظ بها، خريطة توضيحية لمناطق التنازل والاحتفاظ بمربع الشركة، تقرير فني لمناطق التنازل,نوع التنازل، المساحة بالكم2، نسبة التنازل,,
+app_tnazol_shraka_list,AppTnazolShraka,Application: Tnazol Shraka,طلب تنازل عن اسهم او شراكة,المقدرة المالية، السيرة الذاتية، ملف عقد الاتفاق,نوع التنازل، التنازل عن الاسهم لشركة، اسباب التنازل,,
+app_tajeel_tnazol_list,AppTajeelTnazol,Application: Tajeel Tnazol,طلب تأجيل تنازل,مسببات التأجيل,نوع التنازل، اسباب التأجيل,,
+app_tajmeed_list,AppTajmeed,Application: Tajmeed,طلب تجمييد,مسببات القوة القاهرة، خطاب من الجهة الامنية بالمنطقة,بداية التجمييد، نهاية التجميد، سبب التجمييد,,
+app_takhali_list,AppTakhali,Application: Takhali,طلب تخلي,ملف التقرير الفني,تاريخ العرض الفني، مسببات التخلي,,
+app_tamdeed_list,AppTamdeed,Application: Tamdeed,طلب تمديد/تجديد,خطة العمل المجازة، ‫التنازل‬‫ عن‬ ‫جزء‬ ‫من‬ ‫مساحة‬ ‫المربع‬,بداية التمديد، نهاية التمديد، مسببات التمديد,,
+app_taaweed_list,AppTaaweed,Application: Taaweed,طلب تعويض,,بداية التعويض، نهاية التعويض، مسببات التعويض,,
+app_mda_list,AppMda,Application: MDA,طلب MDA,خطة العمل المجازة,بداية الMDA، نهاية الMDA، مسببات الMDA,,
+app_send_samples_for_analysis_list,AppSendSamplesForAnalysis,Application: Send samples for analysis,طلب ارسال عينات للخارج للتحليل,فاتورة مبدئية، استمارة وصف العينات، نتيجة التحليل السابق ان وجدت,الدولة، المدينة، العنوان، تكلفة التحليل,تفاصيل ارسال عينات للخارج للتحليل,نوع العينة، وزن العينة، طريقة  التعبئة، نوع التحليل، الغرض من التحليل
+app_foreigner_procedure_list,AppForeignerProcedure,Application: Foreigner procedure,طلب اجراءات اجنبي,خطاب رسمي من الشركة، صورة من الجواز، السيرة الذاتية، شهادات الخبرة المعتمدة، صورة من الاقامة وعقد العمل في حالة كرت العمل فقط، صورة من الدعوة في حالة الزيارة ,، تاريخ البداية، تاريخ النهاية، الغرض من التصديق,تفاصيل اجراءات اجانب,الاسم، العنوان
+app_aifaa_jomrki_list,AppAifaaJomrki,Application: Aifaa Jomrki,طلب اعفاء جمركي,كشف الاحتياجات المجاز، تصديق وزارة المالية المبدئي، الفواتير النهائية، بوليصة الشحن، شهادة الفحص، شهادة المنشأ، شهادة التغليف، شهادة المواصفات، قوائم التعبئة,,تفاصيل اعفاء جمركي,المواد المطلوبة
+app_reexport_equipments_list,AppReexportEquipments,Application: Reexport Equipments,طلب اعادة صادر لاليات ومعدات,بوليصة الشحن، الفواتير السابقة، شهادة المواصفات,الغرض من الاحتياجات ومدى توافقها مع الخطة,تفاصيل اعادة صادر لاليات ومعدات,الاسم، الرقم المتسلسل، رقم البوليصة، رقم الفاتورة، رقم شهادة التأمين، رقم شهادة الفحص
+app_requirements_list_list,AppRequirementsList,Application: Requirements List,طلب كشف احتياجات,خطة العمل المجازة، فاتورة مبدئية، شهادة المواصفات، كشف المسحوبات من الجمارك للكشف السابق ان وجد، الفواتير السابقة,,معدات المناجم، معدات المصنع، محطة الكهرباء، معدات المعمل الكيميائي، المواد الكيميائية، المتفجرات، الاليات والمتحركات,البند، الوصف، الكمية
+app_visibility_study_list,AppVisibityStudy,Application: Visibity Study,طلب دراسة جدوى,المرفقات,، اسم منطقة الدراسة، نوع الدراسة، تعليق مختصر عن الدراسة,إحداثيات منطقة الدراسة,Point ID، Long/ East/ X، Lat/ West/ Y
+app_temporary_exemption_list,AppTemporaryExemption,Application: Temporary Exemption,طلب افراج مؤقت,المرفقات,,,
+app_restart_activity_list,AppRestartActivity,Application: Restart Activity,طلب مزاولة نشاط,اسباب مزاولة النشاط,,,
+app_fuel_permission_list,AppFuelPermission,Application: Fuel Permission,طلب موافقة وقود,ملف خطاب الشركة,,تفاصيل موافقة وقود,نوع الوقود، كمية الوقود
+app_whom_concern_list,AppWhomConcern,Application: Whom may concern request,طلب شهادة لمن يهمه الامر,ملف شهادة لمن يهمه الامر,الغرض من الشهادة، الموضوع,,

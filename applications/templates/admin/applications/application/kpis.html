@@ -1,0 +1,95 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% block title %}مؤشرات أداء الطلبات{% endblock %}
+{% block content %}
+<h1>مؤشرات أداء الطلبات (تحولات الحالة)</h1>
+<p class="help">
+  النطاق الزمني:
+  {% if days %}آخر {{ days }} يوماً{% else %}كل الفترة{% endif %} —
+  <a href="?days=30">30</a> /
+  <a href="?days=90">90</a> /
+  <a href="?">الكل</a>
+</p>
+
+<div style="display:flex;flex-wrap:wrap;gap:12px;margin:14px 0">
+  <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
+    <div style="font-size:1.8em">{{ kpis.total }}</div><div>إجمالي الطلبات</div>
+  </div>
+  <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
+    <div style="font-size:1.8em">{{ kpis.approval_rate|floatformat:1 }}%</div><div>نسبة الاعتماد (مجاز / مقرر)</div>
+  </div>
+  <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
+    <div style="font-size:1.8em">{{ kpis.backlog_count }}</div><div>طلبات قيد المعالجة</div>
+  </div>
+  <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
+    <div style="font-size:1.8em">{% if kpis.backlog_oldest_days %}{{ kpis.backlog_oldest_days }}{% else %}0{% endif %}</div><div>أقدم طلب قيد المعالجة (أيام)</div>
+  </div>
+</div>
+
+<h2>الطلبات حسب الحالة</h2>
+<table style="width:100%;border-collapse:collapse">
+  {% for label, count in kpis.by_status.items %}
+  <tr><td style="border:1px solid #ddd;padding:6px">{{ label }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ count }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>مدة المراحل (من ← إلى)</h2>
+<table style="width:100%;border-collapse:collapse">
+  <thead><tr>
+    <th style="border:1px solid #ddd;padding:6px">المرحلة</th>
+    <th style="border:1px solid #ddd;padding:6px">العدد</th>
+    <th style="border:1px solid #ddd;padding:6px">متوسط (يوم)</th>
+    <th style="border:1px solid #ddd;padding:6px">الوسيط (يوم)</th>
+    <th style="border:1px solid #ddd;padding:6px">أقصى (يوم)</th>
+  </tr></thead>
+  <tbody>
+  {% for pair, s in kpis.stage_durations.items %}
+    <tr>
+      <td style="border:1px solid #ddd;padding:6px">{{ pair.0 }} ← {{ pair.1 }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ s.count }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ s.avg_days }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ s.median_days }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ s.max_days }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" style="border:1px solid #ddd;padding:6px">لا توجد تحولات.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>حسب المستخدم (من نفّذ)</h2>
+<table style="width:100%;border-collapse:collapse">
+  <thead><tr>
+    <th style="border:1px solid #ddd;padding:6px">المستخدم</th>
+    <th style="border:1px solid #ddd;padding:6px">عدد التحولات</th>
+    <th style="border:1px solid #ddd;padding:6px">قرارات (مجاز/مرفوض)</th>
+    <th style="border:1px solid #ddd;padding:6px">متوسط مدة القرار (يوم)</th>
+  </tr></thead>
+  <tbody>
+  {% for user, info in kpis.per_user.items %}
+    <tr>
+      <td style="border:1px solid #ddd;padding:6px">{{ user }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ info.count }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{{ info.decided }}</td>
+      <td style="border:1px solid #ddd;padding:6px">{% if info.avg_decision_days %}{{ info.avg_decision_days }}{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>التحولات شهرياً</h2>
+<table style="width:100%;border-collapse:collapse">
+  {% for month, count in kpis.monthly.items %}
+  <tr>
+    <td style="border:1px solid #ddd;padding:6px;width:120px">{{ month }}</td>
+    <td style="border:1px solid #ddd;padding:6px">
+      <div style="background:#417690;height:18px;width:{% widthratio count kpis.total 100 %}%;min-width:2px"></div>
+    </td>
+    <td style="border:1px solid #ddd;padding:6px">{{ count }}</td>
+  </tr>
+  {% empty %}
+    <tr><td style="border:1px solid #ddd;padding:6px">لا توجد تحولات.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
