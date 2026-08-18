@@ -7,6 +7,9 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import path, reverse
 
+from roles.roles import scoped_company_types
+from roles.scoping import CompanyTypeScopedAdminMixin
+
 from .forms import build_application_form
 from .kpis import compute_kpis, format_duration
 from .models import (
@@ -23,6 +26,10 @@ from .models import (
     valid_event_labels,
 )
 
+admin.site.title = "منصة خدمات الشركات"
+admin.site.site_title = "منصة خدمات الشركات"
+admin.site.site_header = "منصة خدمات الشركات"
+admin.site.site_url = None
 
 class ApplicationTypeForm(forms.ModelForm):
     """Renders event_label as a dropdown of the selected category's event types."""
@@ -116,7 +123,7 @@ class ApplicationTransitionAdmin(admin.ModelAdmin):
 
 
 @admin.register(Application)
-class ApplicationAdmin(admin.ModelAdmin):
+class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     """Type-driven application entry.
 
     The change page renders the header plus the form generated from the
@@ -164,6 +171,49 @@ class ApplicationAdmin(admin.ModelAdmin):
 
     transition_history.short_description = "تحولات الحالة والمدة"
 
+    # ------------------------------------------------ draft-only delete (scoped)
+
+    def has_delete_permission(self, request, obj=None):
+        """technical_data_entry may delete DRAFT applications of its own types only.
+
+        obj is None (bulk "delete selected") is disabled for every non-superuser.
+        """
+        if request.user.is_superuser:
+            return True
+        if not request.user.has_perm("applications.delete_application"):
+            return False
+        if obj is None:
+            return False  # no bulk delete for non-superusers
+        if obj.status != ApplicationStatus.DRAFT:
+            return False
+        scope = scoped_company_types(request.user)
+        return scope is None or obj.agreement.company.company_type in scope
+
+    def delete_queryset(self, request, queryset):
+        # Restrict bulk deletion to DRAFT (+ scope) for non-superusers only;
+        # superusers keep the full bulk delete.
+        if not request.user.is_superuser:
+            from roles.roles import company_scope_q
+
+            queryset = queryset.filter(status=ApplicationStatus.DRAFT)
+            q = company_scope_q(request.user, Application)
+            if q is not None:
+                queryset = queryset.filter(q)
+        return super().delete_queryset(request, queryset)
+
+    def get_deleted_objects(self, objs, request):
+        # Deleting a DRAFT discards the draft's own cascade rows (transitions,
+        # attachments, fields, details). Django's default checks delete
+        # permission on every related model, which would block the scoped
+        # technical_data_entry role; only the Application delete permission
+        # (already enforced by has_delete_permission) should matter here.
+        deleted_objects, model_count, perms_needed, protected = super().get_deleted_objects(
+            objs, request
+        )
+        if not request.user.is_superuser:
+            perms_needed.clear()
+        return deleted_objects, model_count, perms_needed, protected
+
     class Media:
         js = ("js/application_app_type.js",)
 
@@ -174,6 +224,16 @@ class ApplicationAdmin(admin.ModelAdmin):
         form = build_application_form(app_type, instance=obj)
         form.current_user = request.user
         form.current_obj = obj
+        # This custom form bypasses modelform_factory, so ModelAdmin's
+        # formfield_for_foreignkey is never called for the agreement field;
+        # apply the scoped-company-type filter here explicitly. The class is
+        # freshly built per request, so mutating base_fields is safe.
+        from companies.models import Agreement
+        from roles.roles import company_scope_q
+
+        q = company_scope_q(request.user, Agreement)
+        if q is not None and "agreement" in form.base_fields:
+            form.base_fields["agreement"].queryset = Agreement.objects.filter(q)
         return form
 
     def get_fieldsets(self, request, obj=None):
@@ -314,6 +374,9 @@ class ApplicationAdmin(admin.ModelAdmin):
         return custom + urls
 
     def kpis_view(self, request):
+        user = request.user
+        if not (user.is_superuser or user.has_perm("applications.can_review")):
+            raise PermissionDenied("ليست لديك صلاحية الاطلاع على مؤشرات الأداء.")
         raw = request.GET.get("days", "")
         days = int(raw) if raw.isdigit() else None
         context = {

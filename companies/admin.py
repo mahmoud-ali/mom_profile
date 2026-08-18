@@ -8,6 +8,8 @@ from applications.models import Application
 
 from auditlog.models import LogEntry
 
+from roles.scoping import CompanyTypeScopedAdminMixin
+
 from .models import (
     Agreement,
     Block,
@@ -79,10 +81,13 @@ class AgreementAdminForm(forms.ModelForm):
                 company = Company.objects.get(pk=self.data.get("company"))
             except (Company.DoesNotExist, ValueError, TypeError):
                 pass
-        if company is not None:
+        # View-only users get a form with ALL fields excluded (Django renders
+        # it read-only), so every field access must be guarded.
+        contract_field = self.fields.get("contract_type")
+        if company is not None and contract_field is not None:
             allowed = contract_type_options(company.company_type)
             if allowed:
-                self.fields["contract_type"].choices = [
+                contract_field.choices = [
                     (value, label)
                     for value, label in ContractType.choices
                     if value in allowed
@@ -95,7 +100,8 @@ class AgreementAdminForm(forms.ModelForm):
             ]
             for ct_value, _ in CompanyType.choices
         }
-        self.fields["contract_type"].widget.attrs["data-contract-map"] = json.dumps(contract_map)
+        if contract_field is not None:
+            contract_field.widget.attrs["data-contract-map"] = json.dumps(contract_map)
         # The RelatedFieldWidgetWrapper passes the raw BoundField attrs to the
         # inner widget, so data attrs must live on BOTH the wrapper and the inner
         # widget to survive rendering. The company field is absent on inline
@@ -116,10 +122,10 @@ class AgreementAdminForm(forms.ModelForm):
                 state = State.objects.get(pk=self.data.get("state"))
             except (State.DoesNotExist, ValueError, TypeError):
                 pass
-        if state is not None:
-            self.fields["locality"].queryset = Locality.objects.filter(state=state)
-        locality_map_json = json.dumps({loc.pk: loc.state_id for loc in Locality.objects.all()})
         locality_field = self.fields.get("locality")
+        if state is not None and locality_field is not None:
+            locality_field.queryset = Locality.objects.filter(state=state)
+        locality_map_json = json.dumps({loc.pk: loc.state_id for loc in Locality.objects.all()})
         if locality_field is not None:
             locality_widget = locality_field.widget
             locality_widget.attrs["data-locality-map"] = locality_map_json
@@ -188,7 +194,7 @@ class AgreementInline(admin.TabularInline):
 
 
 @admin.register(Company)
-class CompanyAdmin(admin.ModelAdmin):
+class CompanyAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     list_display = ("name_ar", "company_type", "general_status", "registration_no", "updated_at")
     list_filter = ("company_type", "general_status")
     search_fields = ("name_ar", "name_en", "registration_no", "phone")
@@ -254,7 +260,7 @@ class ApplicationInline(admin.TabularInline):
 
 
 @admin.register(Agreement)
-class AgreementAdmin(admin.ModelAdmin):
+class AgreementAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     form = AgreementAdminForm
     filter_horizontal = ("minerals",)
     readonly_fields = ("audit_history",)
@@ -289,12 +295,14 @@ class AgreementAdmin(admin.ModelAdmin):
 class FinancialPositionAdmin(admin.ModelAdmin):
     list_display = ("agreement", "debt", "current_claim", "balance", "satisfied")
     search_fields = ("agreement__company__name_ar", "agreement__company__name_en")
+    autocomplete_fields = ("agreement",)
 
 
 @admin.register(TechnicalPosition)
-class TechnicalPositionAdmin(admin.ModelAdmin):
+class TechnicalPositionAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     list_display = ("agreement", "work_program", "processing_method")
     search_fields = ("agreement__company__name_ar", "agreement__company__name_en")
+    autocomplete_fields = ("agreement",)
 
 
 @admin.register(LegalEvent)
@@ -309,10 +317,12 @@ class FinancialEventAdmin(admin.ModelAdmin):
     list_display = ("agreement", "event_type", "date", "amount", "application")
     list_filter = ("event_type",)
     search_fields = ("agreement__company__name_ar", "description")
+    autocomplete_fields = ("agreement",)
 
 
 @admin.register(TechnicalEvent)
-class TechnicalEventAdmin(admin.ModelAdmin):
+class TechnicalEventAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     list_display = ("agreement", "event_type", "category", "date", "application")
     list_filter = ("event_type",)
     search_fields = ("agreement__company__name_ar", "description", "category")
+    autocomplete_fields = ("agreement",)

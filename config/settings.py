@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "auditlog",
     "companies",
     "applications",
+    "roles",
 ]
 
 MIDDLEWARE = [

@@ -21,12 +21,29 @@ TechnicalEvent — all under the Agreement.
 
 ## Roles (workflow)
 
-- data_entry — creates/edits drafts and confirms them (مسودة -> مؤكد).
+Roles are defined centrally in roles/roles.py (ROLE_DEFINITIONS — the single
+source of truth) and built into Django groups by `manage.py create_roles`.
+The old `data_entry` group is retired; the command warns about users still in
+it so they can be reassigned. A role's permissions can also be adjusted
+directly on its Admin > الأدوار change page; the "مزامنة الصلاحيات" action
+(or re-running create_roles) restores the canonical ROLE_DEFINITIONS set.
+Role names are read-only (they key the ROLE_DEFINITIONS mapping) and roles are
+created/deleted only via create_roles.
+
+- technical_data_entry — scoped by the user's assigned company types
+  (StaffProfile.company_types, set on the user page or via Admin > الأدوار):
+  adds/edits TechnicalPosition, TechnicalEvent and Applications for those
+  company types only, confirms/submits drafts (مسودة -> مؤكد), and may delete
+  DRAFT applications of its own types. Has no access to the ApplicationType
+  catalog (manager-only) or financial data.
+- financial_data_entry — adds/edits FinancialPosition and FinancialEvent for
+  ALL companies; no application or catalog access.
 - manager — advances to under-processing and approves or rejects
-  (مؤكد -> قيد المعالجة -> مجاز / مرفوض).
+  (مؤكد -> قيد المعالجة -> مجاز / مرفوض); full company-file editing; the
+  ApplicationType (إجراءات) catalog is manager-only.
 - When a manager approves an application, one historical event is created
   automatically on the application's agreement (idempotent, no duplicates).
-- superuser bypasses all checks.
+- superuser bypasses all checks and scoping.
 
 ## Type-driven application forms
 
@@ -89,14 +106,15 @@ the admin (field_specs / detail_specs JSON). Numeric input is validated
     .venv/bin/pip install -r requirements.txt
     .venv/bin/python manage.py migrate
     .venv/bin/python manage.py load_app_types      # seed the 98 procedure types from the 4 CSVs
-    .venv/bin/python manage.py create_roles        # create data_entry and manager groups
+    .venv/bin/python manage.py create_roles        # create the roles defined in roles/roles.py
     .venv/bin/python manage.py seed_reference      # Sudan states + minerals
     .venv/bin/python manage.py import_profile_data  # import data/companies.csv + data/agreements.csv
     .venv/bin/python manage.py createsuperuser
     .venv/bin/python manage.py runserver           # admin at http://127.0.0.1:8000/admin/
 
-Create ordinary users, mark them staff, and add each to one of the groups
-(data_entry / manager) under Admin > Users.
+Create ordinary users, mark them staff, and assign each a role under
+Admin > الأدوار > توزيع الأدوار (role + company types for the scoped
+technical_data_entry role; the same types are also editable on the user page).
 
 ## Useful commands
 
@@ -129,8 +147,14 @@ and agreement number); --dry-run validates inside a rolled-back transaction.
   a locality whose state does not match the agreement's state.
 - applications/ — ApplicationType catalog, Application with the role-based
   status machine, dynamic type-driven forms (forms.py + custom change_form
-  template), attachments/fields/details, and the management commands
-  (load_app_types, create_roles).
+  template), attachments/fields/details, and the load_app_types command.
+- roles/ — central role management: ROLE_DEFINITIONS (single source of truth),
+  the create_roles command, StaffProfile (per-user company-type scope), the
+  company-type scoping mixin, and the admin "الأدوار" section (role list +
+  assignment page).
+- config/sidebar.py — admin sidebar ordering: override of admin.site.get_app_list
+  with explicit app/model order maps (APP_ORDER / MODEL_ORDER); edit the maps
+  to change the sidebar, then refresh.
 
 ## Event mapping
 

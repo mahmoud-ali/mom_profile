@@ -21,6 +21,13 @@ from .models import (
 )
 
 
+def assign_role(user, role_name, company_types=None):
+    """Put a user into one managed role (group + scope profile)."""
+    from roles.roles import apply_role_to_user
+
+    apply_role_to_user(user, role_name, company_types=company_types)
+
+
 class LoadAppTypesTests(TestCase):
     def test_all_catalogs_loaded_and_idempotent(self):
         call_command("load_app_types")
@@ -65,7 +72,7 @@ class WorkflowTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="entry1", password="x")
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.manager = User.objects.create_user(username="manager1", password="x")
         cls.manager.groups.add(Group.objects.get(name="manager"))
         cls.company = Company.objects.create(
@@ -103,7 +110,7 @@ class WorkflowTests(TestCase):
         app.transition_status(ApplicationStatus.APPROVED, self.manager)  # idempotent
         self.assertEqual(TechnicalEvent.objects.filter(application=app).count(), 1)
 
-    def test_data_entry_cannot_approve(self):
+    def test_technical_data_entry_cannot_approve(self):
         app = self._make_app()
         with self.assertRaises(PermissionDenied):
             app.transition_status(ApplicationStatus.APPROVED, self.entry)
@@ -151,7 +158,7 @@ class DynamicFormTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="entry1", password="x", is_staff=True)
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.company = Company.objects.create(
             name_ar="شركة الاستكشاف", company_type=CompanyType.EXPLORATION
         )
@@ -318,7 +325,7 @@ class NumericFieldTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="nentry", password="x", is_staff=True)
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.company = Company.objects.create(
             name_ar="شركة الأرقام", company_type=CompanyType.EXPLORATION
         )
@@ -460,7 +467,7 @@ class FieldLayoutTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="lentry", password="x", is_staff=True)
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.company = Company.objects.create(
             name_ar="شركة التخطيط", company_type=CompanyType.EXPLORATION
         )
@@ -595,7 +602,7 @@ class RequiredFieldTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="rentry", password="x", is_staff=True)
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.company = Company.objects.create(
             name_ar="شركة الإلزام", company_type=CompanyType.EXPLORATION
         )
@@ -679,7 +686,7 @@ class TransitionAndKpiTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="tentry", password="x")
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.manager = User.objects.create_user(username="tmanager", password="x")
         cls.manager.groups.add(Group.objects.get(name="manager"))
         cls.company = Company.objects.create(
@@ -898,7 +905,7 @@ class ForeignerPurposeFieldTests(TestCase):
         call_command("load_app_types")
         call_command("create_roles")
         cls.entry = User.objects.create_user(username="fentry", password="x", is_staff=True)
-        cls.entry.groups.add(Group.objects.get(name="data_entry"))
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
         cls.company = Company.objects.create(
             name_ar="شركة الأجانب", company_type=CompanyType.EXPLORATION
         )
