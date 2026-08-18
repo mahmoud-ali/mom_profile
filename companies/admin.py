@@ -160,8 +160,8 @@ class LocalityAdmin(admin.ModelAdmin):
 
 @admin.register(Nationality)
 class NationalityAdmin(admin.ModelAdmin):
-    list_display = ("code", "name_ar")
-    search_fields = ("code", "name_ar")
+    list_display = ("name_ar", )
+    search_fields = ("name_ar", )
 
 
 class AgreementInline(admin.TabularInline):
