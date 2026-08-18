@@ -19,7 +19,6 @@ from .models import (
     ApplicationDetailField,
     ApplicationField,
     ApplicationStatus,
-    ApplicationTransition,
     ApplicationType,
     EVENT_LABELS_BY_CATEGORY,
     WorkingHoursSchedule,
@@ -87,27 +86,6 @@ class ApplicationTypeAdmin(admin.ModelAdmin):
 @admin.register(WorkingHoursSchedule)
 class WorkingHoursScheduleAdmin(admin.ModelAdmin):
     list_display = ("name", "start_date", "end_date", "work_start", "work_end", "working_weekdays")
-
-
-@admin.register(ApplicationTransition)
-class ApplicationTransitionAdmin(admin.ModelAdmin):
-    list_display = ("application", "from_status", "to_status", "user", "timestamp", "duration")
-    list_filter = ("to_status", "user")
-    search_fields = ("application__agreement__company__name_ar",)
-
-    def duration(self, obj):
-        return format_duration(obj.duration_seconds)
-
-    duration.short_description = "المدة في الحالة"
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
 
 
 @admin.register(Application)
