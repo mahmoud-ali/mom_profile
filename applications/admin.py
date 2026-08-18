@@ -1,8 +1,9 @@
 import json
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.admin import RelatedOnlyFieldListFilter
+from django.contrib.admin.widgets import AutocompleteSelect
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
@@ -10,6 +11,8 @@ from django.urls import path, reverse
 
 from roles.roles import scoped_company_types
 from roles.scoping import CompanyTypeScopedAdminMixin
+
+from companies.models import Agreement, FinancialPosition, TechnicalPosition
 
 from .forms import build_application_form
 from .kpis import compute_kpis, format_duration
@@ -28,6 +31,7 @@ from .workflow import (
     ENTRY_FIELD_NAMES,
     ApplicationStatus,
     FINAL_DECISION_STATUSES,
+    Recommendation,
     entry_fields_for,
     is_editable,
 )
@@ -105,6 +109,26 @@ class ApplicationTypeAdmin(admin.ModelAdmin):
 @admin.register(WorkingHoursSchedule)
 class WorkingHoursScheduleAdmin(admin.ModelAdmin):
     list_display = ("name", "start_date", "end_date", "work_start", "work_end", "working_weekdays")
+
+
+class CommitteeRecommendationForm(forms.Form):
+    """Small decision form for the committee slideshow.
+
+    The slideshow only ever advances a «قيد المعالجة» application to
+    «توصية اللجنة», so it needs just the committee decision + its notes; the
+    rest of the workflow (who/when) is recorded by transition_application().
+    """
+
+    committee_recommendation = forms.ChoiceField(
+        label="توصية اللجنة",
+        choices=Recommendation.choices,
+        required=True,
+    )
+    committee_recommendation_notes = forms.CharField(
+        label="ملاحظات توصية اللجنة",
+        widget=forms.Textarea(attrs={"rows": 3}),
+        required=False,
+    )
 
 
 @admin.register(Application)
@@ -217,14 +241,27 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
         form.current_obj = obj
         # This custom form bypasses modelform_factory, so ModelAdmin's
         # formfield_for_foreignkey is never called for the agreement field;
-        # apply the scoped-company-type filter here explicitly. The class is
-        # freshly built per request, so mutating base_fields is safe.
-        from companies.models import Agreement
+        # apply the scoped-company-type filter and the searchable autocomplete
+        # widget here explicitly. The class is freshly built per request, so
+        # mutating base_fields is safe.
         from roles.roles import company_scope_q
 
         q = company_scope_q(request.user, Agreement)
         if q is not None and "agreement" in form.base_fields:
             form.base_fields["agreement"].queryset = Agreement.objects.filter(q)
+        if "agreement" in form.base_fields:
+            # Pass the ForeignKey itself (like formfield_for_foreignkey does):
+            # AutocompleteMixin reads field.model (source model) and field.name
+            # to build the autocomplete endpoint params.
+            form.base_fields["agreement"].widget = AutocompleteSelect(
+                Application._meta.get_field("agreement"),
+                self.admin_site,
+            )
+        if "app_type" in form.base_fields:
+            form.base_fields["app_type"].widget = AutocompleteSelect(
+                Application._meta.get_field("app_type"),
+                self.admin_site,
+            )
         return form
 
     def get_fieldsets(self, request, obj=None):
@@ -330,6 +367,12 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
                     ApplicationDetailField.objects.create(detail=detail, label=col_label, value=value)
 
     def render_change_form(self, request, context, add=False, change=False, form_url="", obj=None):
+        # Generic admin save buttons: always on the add page and for drafts,
+        # hidden once the application leaves the draft (transition buttons
+        # only). Must be set for the add page too (obj is None there).
+        context["show_save_buttons"] = add or (
+            obj is not None and obj.status == ApplicationStatus.DRAFT
+        )
         if obj is not None:
             form = context["adminform"].form
             at = obj.app_type
@@ -391,9 +434,6 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
                     if target == ApplicationStatus.SUBMITTED:
                         label = "تأكيد الطلب"
                     context["transition_buttons"].append((target, label))
-            context["show_save_buttons"] = add or (
-                obj is not None and obj.status == ApplicationStatus.DRAFT
-            )
         return super().render_change_form(
             request, context, add=add, change=change, form_url=form_url, obj=obj
         )
@@ -414,8 +454,153 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
                 self.admin_site.admin_view(self.kpis_view),
                 name="%s_%s_kpis" % info,
             ),
+            path(
+                "committee-slideshow/",
+                self.admin_site.admin_view(self.committee_slideshow_view),
+                name="%s_%s_committee_slideshow" % info,
+            ),
         ]
         return custom + urls
+
+    # ------------------------------------------------------ committee slideshow
+
+    def _committee_slideshow_qs(self):
+        """The «قيد المعالجة» applications in deterministic review order."""
+        return Application.objects.filter(
+            status=ApplicationStatus.UNDER_PROCESSING
+        ).order_by("submitted_at", "pk")
+
+    def committee_slideshow_view(self, request):
+        """One-at-a-time review of «قيد المعالجة» applications for the committee.
+
+        Each slide shows the application (dynamic form fields, attachments,
+        detail rows) plus its full agreement profile, and a small form to record
+        «توصية اللجنة» + «ملاحظات توصية اللجنة». Submitting advances the
+        application to «توصية اللجنة» via the central workflow and then shows
+        the next remaining application.
+        """
+        user = request.user
+        if not (
+            user.is_superuser or user.has_perm("applications.can_committee_recommend")
+        ):
+            raise PermissionDenied("ليست لديك صلاحية تقديم توصية اللجنة.")
+        base_url = reverse("admin:applications_application_committee_slideshow")
+        ids = list(self._committee_slideshow_qs().values_list("pk", flat=True))
+        count = len(ids)
+
+        raw_index = (
+            request.GET.get("index", "0")
+            if request.method == "GET"
+            else request.POST.get("index", "0")
+        )
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            index = 0
+
+        if count == 0:
+            return render(
+                request,
+                "admin/applications/application/committee_slideshow.html",
+                {
+                    **self.admin_site.each_context(request),
+                    "title": "عرض تقديمي للجنة — الطلبات قيد المعالجة",
+                    "count": 0,
+                    "index": 0,
+                    "current": None,
+                    "form": CommitteeRecommendationForm(),
+                },
+            )
+
+        index = max(0, min(index, count - 1))
+        form = CommitteeRecommendationForm()
+        current_pk = ids[index]
+
+        if request.method == "POST":
+            form = CommitteeRecommendationForm(request.POST)
+            raw_pk = request.POST.get("app_pk", "")
+            posted = None
+            if str(raw_pk).isdigit():
+                posted = Application.objects.filter(
+                    pk=int(raw_pk), status=ApplicationStatus.UNDER_PROCESSING
+                ).first()
+            if posted is not None and form.is_valid():
+                try:
+                    posted.transition_status(
+                        ApplicationStatus.COMMITTEE_RECOMMENDATION,
+                        user,
+                        recommendation=form.cleaned_data["committee_recommendation"],
+                        notes=form.cleaned_data["committee_recommendation_notes"] or "",
+                    )
+                    # transition_application mutates the instance in memory only;
+                    # persist the status + committee recommendation fields.
+                    posted.save()
+                except PermissionDenied as exc:
+                    messages.error(request, str(exc))
+                    current_pk = posted.pk
+                else:
+                    messages.success(request, f"تم حفظ توصية اللجنة: {posted}")
+                    # The decided application leaves the snapshot, so the same
+                    # index now points at the next remaining application.
+                    return HttpResponseRedirect(f"{base_url}?index={index}")
+            else:
+                if posted is not None:
+                    current_pk = posted.pk
+                elif str(raw_pk).isdigit():
+                    messages.warning(request, "هذا الطلب لم يعد قيد المعالجة.")
+
+        current = (
+            Application.objects.select_related("agreement__company", "app_type")
+            .prefetch_related(
+                "fields",
+                "attachments",
+                "details__fields",
+                "agreement__company__nationalities",
+                "agreement__minerals",
+                "agreement__legal_events",
+                "agreement__financial_events",
+                "agreement__technical_events",
+            )
+            .get(pk=current_pk)
+        )
+
+        agreement = current.agreement
+        company = agreement.company
+        financial = FinancialPosition.objects.filter(agreement=agreement).first()
+        technical = TechnicalPosition.objects.filter(agreement=agreement).first()
+
+        details = []
+        for d in current.details.all().order_by("order", "id"):
+            details.append(
+                {"category": d.category, "cells": [(f.label, f.value) for f in d.fields.all()]}
+            )
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "عرض تقديمي للجنة — الطلبات قيد المعالجة",
+            "index": index,
+            "count": count,
+            "has_prev": index > 0,
+            "has_next": index < count - 1,
+            "prev_index": index - 1,
+            "next_index": index + 1,
+            "current": current,
+            "app_type": current.app_type,
+            "company": company,
+            "agreement": agreement,
+            "financial": financial,
+            "technical": technical,
+            "legal_events": list(agreement.legal_events.all()),
+            "financial_events": list(agreement.financial_events.all()),
+            "technical_events": list(agreement.technical_events.all()),
+            "app_fields": list(current.fields.all()),
+            "attachments": list(current.attachments.all()),
+            "details": details,
+            "form": form,
+        }
+        return render(
+            request, "admin/applications/application/committee_slideshow.html", context
+        )
 
     def kpis_view(self, request):
         user = request.user

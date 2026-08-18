@@ -223,6 +223,24 @@ start/end date, work_start/work_end, working_weekdays); dates without a
 schedule fall back to Sun–Thu 08:00–16:00 (Africa/Khartoum). seed_reference
 creates the default schedule.
 
+## Committee slideshow (عرض تقديمي للجنة)
+
+A read-only slideshow for the committee review step, reached from
+Admin → الطلبات → «عرض تقديمي للجنة» (the link is visible to users holding
+`applications.can_committee_recommend`). It shows every application currently
+in «قيد المعالجة» one at a time — the application itself (header, dynamic
+form fields, attachments, detail rows) plus its full agreement profile
+(company, agreement, financial position, technical position and the
+legal/financial/technical history events) — with a per-slide form for
+«توصية اللجنة» (موصى به / غير موصى به, required) and «ملاحظات توصية اللجنة»
+(optional). Saving a recommendation advances that application to
+«توصية اللجنة» through the central workflow (`transition_application`), so
+`committee_recommended_by` / `committee_recommended_at` are recorded like the
+normal change page, and the view auto-advances to the next remaining
+application. The recommendation is final once submitted (frozen), matching the
+rest of the workflow. There is no dedicated committee role: access reuses the
+existing `can_committee_recommend` permission (today the manager role).
+
 ## Notes
 
 - SQLite is used for local development; swap DATABASES for Postgres in production.

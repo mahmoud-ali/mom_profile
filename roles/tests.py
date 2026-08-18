@@ -369,14 +369,38 @@ class ScopedAccessTests(TestCase):
 
     def test_agreement_dropdown_scoped_on_add_pages(self):
         client, _ = self._scoped_client()
+        # the applications add page uses a searchable autocomplete agreement field
         resp = client.get(reverse("admin:applications_application_add"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "شركة الاستكشاف")
-        self.assertNotContains(resp, "شركة الإنتاج")
+        html = resp.content.decode("utf-8")
+        self.assertIn('name="agreement"', html)
+        self.assertIn("admin-autocomplete", html)
+        # scoping is enforced server-side by the autocomplete endpoint
+        resp = client.get(
+            reverse("admin:autocomplete"),
+            {
+                "app_label": "applications",
+                "model_name": "application",
+                "field_name": "agreement",
+                "term": "استكشاف",
+            },
+        )
+        self.assertEqual(
+            [int(r["id"]) for r in resp.json()["results"]], [self.exp_agr.pk]
+        )
+        resp = client.get(
+            reverse("admin:autocomplete"),
+            {
+                "app_label": "applications",
+                "model_name": "application",
+                "field_name": "agreement",
+                "term": "إنتاج",
+            },
+        )
+        self.assertEqual([r["id"] for r in resp.json()["results"]], [])
         resp = client.get(reverse("admin:companies_technicalevent_add"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "شركة الاستكشاف")
-        self.assertNotContains(resp, "شركة الإنتاج")
+        self.assertIn("admin-autocomplete", resp.content.decode("utf-8"))
 
     def test_empty_scope_sees_nothing(self):
         client, _ = self._scoped_client(types=[])

@@ -1,0 +1,272 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<style>
+  .slideshow-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 12px 0;
+    padding: 10px 14px;
+    background: #f8f8f8;
+    border: 1px solid #eee;
+    border-radius: 6px;
+  }
+  .slideshow-toolbar .progress { font-size: 1.1em; font-weight: bold; color: #417690; }
+  .slideshow-toolbar .nav a {
+    display: inline-block;
+    margin: 0 4px;
+    padding: 6px 16px;
+    border: 1px solid #79aec8;
+    border-radius: 4px;
+    background: #fff;
+    color: #417690;
+    text-decoration: none;
+    font-weight: bold;
+  }
+  .slideshow-toolbar .nav a.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .slideshow-grid { display: flex; flex-wrap: wrap; gap: 0 2%; }
+  .slideshow-grid .cell { box-sizing: border-box; margin-bottom: 10px; }
+  .slideshow-grid .cell.half { width: 49%; }
+  .slideshow-grid .cell.full { width: 100%; }
+  .slideshow-grid .cell label { display: block; font-weight: bold; color: #666; }
+  .slideshow-grid .cell .value { margin-top: 2px; }
+  .slideshow-section h2 { background: #79aec8; color: #fff; padding: 8px 12px; border-radius: 4px 4px 0 0; margin: 0; }
+  .slideshow-section { border: 1px solid #79aec8; border-radius: 6px; margin: 14px 0; overflow: hidden; }
+  .slideshow-section .body { padding: 12px 16px; }
+  .slideshow-section table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  .slideshow-section table th, .slideshow-section table td { border: 1px solid #ddd; padding: 6px; text-align: right; }
+  .slideshow-section table th { background: #f4f4f4; }
+  .detail-block { border: 1px solid #eee; border-radius: 4px; padding: 8px; margin: 8px 0; }
+  .detail-block .cat { font-weight: bold; color: #417690; margin-bottom: 6px; }
+</style>
+
+{% if count == 0 %}
+  <div class="slideshow-section">
+    <h2>اكتمل العرض</h2>
+    <div class="body">
+      <p class="help">لا توجد طلبات قيد المعالجة حالياً.</p>
+      <p><a href="{% url 'admin:applications_application_changelist' %}">العودة إلى قائمة الطلبات</a></p>
+    </div>
+  </div>
+{% else %}
+
+  <div class="slideshow-toolbar">
+    <span class="progress">الطلب {{ index|add:"1" }} من {{ count }}</span>
+    <span class="nav">
+      <a href="?index={{ prev_index }}"{% if not has_prev %} class="disabled"{% endif %}>‹ السابق</a>
+      <a href="?index={{ next_index }}"{% if not has_next %} class="disabled"{% endif %}>التالي ›</a>
+    </span>
+  </div>
+
+  {# ------------------------------------------------ application slide #}
+  <div class="slideshow-section">
+    <h2>الطلب — {{ app_type.arabic_name }}</h2>
+    <div class="body">
+      <div class="slideshow-grid">
+        <div class="cell half"><label>الشركة</label><div class="value">{{ company.name_ar }}</div></div>
+        <div class="cell half"><label>نوع الشركة</label><div class="value">{{ company.get_company_type_display }}</div></div>
+        <div class="cell half"><label>نوع الطلب</label><div class="value">{{ app_type.arabic_name }}</div></div>
+        <div class="cell half"><label>الحالة</label><div class="value">{{ current.get_status_display }}</div></div>
+        <div class="cell half"><label>تاريخ التأكيد</label><div class="value">{% if current.submitted_at %}{{ current.submitted_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}</div></div>
+        <div class="cell half"><label>مؤكّد الطلب</label><div class="value">{% if current.submitted_by %}{{ current.submitted_by }}{% else %}—{% endif %}</div></div>
+        <div class="cell full"><label>ملاحظات الطلب</label><div class="value">{{ current.notes|default:"—" }}</div></div>
+      </div>
+
+      {% if app_fields %}
+        <h3>بيانات الاستمارة</h3>
+        <table>
+          <tbody>
+            {% for field in app_fields %}
+              <tr><th style="width:35%">{{ field.label }}</th><td>{{ field.value|default:"—" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if attachments %}
+        <h3>المرفقات</h3>
+        <ul>
+          {% for attachment in attachments %}
+            <li>
+              {{ attachment.label }}:
+              {% if attachment.file %}
+                <a href="{{ attachment.file.url }}" target="_blank" rel="noopener">{{ attachment.file.name }}</a>
+                {% if attachment.file.size %} ({{ attachment.file.size|filesizeformat }}){% endif %}
+              {% else %}—{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if details %}
+        <h3>التفاصيل</h3>
+        {% for detail in details %}
+          <div class="detail-block">
+            {% if detail.category %}<div class="cat">{{ detail.category }}</div>{% endif %}
+            <table>
+              <tbody>
+                {% for label, value in detail.cells %}
+                  <tr><th style="width:35%">{{ label }}</th><td>{{ value|default:"—" }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  {# ------------------------------------------------ full agreement profile #}
+  <div class="slideshow-section">
+    <h2>ملف الاتفاقية الكامل</h2>
+    <div class="body">
+
+      <h3>بيانات الشركة</h3>
+      <div class="slideshow-grid">
+        <div class="cell half"><label>اسم الشركة (عربي)</label><div class="value">{{ company.name_ar }}</div></div>
+        <div class="cell half"><label>Company name (English)</label><div class="value">{{ company.name_en|default:"—" }}</div></div>
+        <div class="cell half"><label>نوع الشركة</label><div class="value">{{ company.get_company_type_display }}</div></div>
+        <div class="cell half"><label>رقم التسجيل</label><div class="value">{{ company.registration_no|default:"—" }}</div></div>
+        <div class="cell full"><label>العنوان</label><div class="value">{{ company.address|default:"—" }}</div></div>
+        <div class="cell half"><label>الهاتف</label><div class="value">{{ company.phone|default:"—" }}</div></div>
+        <div class="cell half"><label>البريد الإلكتروني</label><div class="value">{{ company.email|default:"—" }}</div></div>
+        <div class="cell half"><label>الموقع الإلكتروني</label><div class="value">{{ company.website|default:"—" }}</div></div>
+        <div class="cell half"><label>الجنسيات</label><div class="value">{% for n in company.nationalities.all %}{{ n.name_ar }}{% if not forloop.last %}، {% endif %}{% empty %}—{% endfor %}</div></div>
+        <div class="cell half"><label>اسم المدير</label><div class="value">{{ company.manager_name|default:"—" }}</div></div>
+        <div class="cell half"><label>هاتف المدير</label><div class="value">{{ company.manager_phone|default:"—" }}</div></div>
+        <div class="cell half"><label>اسم الممثل</label><div class="value">{{ company.rep_name|default:"—" }}</div></div>
+        <div class="cell half"><label>هاتف الممثل</label><div class="value">{{ company.rep_phone|default:"—" }}</div></div>
+        <div class="cell half"><label>حالة الشركة العامة</label><div class="value">{{ company.get_general_status_display }}</div></div>
+        <div class="cell full"><label>ملاحظات</label><div class="value">{{ company.notes|default:"—" }}</div></div>
+      </div>
+
+      <h3>بيانات الاتفاقية / العقد</h3>
+      <div class="slideshow-grid">
+        <div class="cell half"><label>رقم الاتفاقية/العقد</label><div class="value">{{ agreement.agreement_no|default:"—" }}</div></div>
+        <div class="cell half"><label>نوع العقد</label><div class="value">{{ agreement.get_contract_type_display }}</div></div>
+        <div class="cell half"><label>المربع</label><div class="value">{% if agreement.block %}{{ agreement.block }}{% else %}—{% endif %}</div></div>
+        <div class="cell half"><label>الولاية</label><div class="value">{% if agreement.state %}{{ agreement.state.name_ar }}{% else %}—{% endif %}</div></div>
+        <div class="cell half"><label>المحلية</label><div class="value">{% if agreement.locality %}{{ agreement.locality.name_ar }}{% else %}—{% endif %}</div></div>
+        <div class="cell half"><label>المنطقة</label><div class="value">{{ agreement.area_name|default:"—" }}</div></div>
+        <div class="cell half"><label>تاريخ البداية</label><div class="value">{{ agreement.start_date|default:"—" }}</div></div>
+        <div class="cell half"><label>تاريخ النهاية</label><div class="value">{{ agreement.end_date|default:"—" }}</div></div>
+        <div class="cell half"><label>تاريخ التوقيع</label><div class="value">{{ agreement.signing_date|default:"—" }}</div></div>
+        <div class="cell half"><label>المساحة الأولية (كم2)</label><div class="value">{{ agreement.initial_area_km2|default:"—" }}</div></div>
+        <div class="cell half"><label>المساحة الحالية (كم2)</label><div class="value">{{ agreement.current_area_km2|default:"—" }}</div></div>
+        <div class="cell half"><label>المعادن</label><div class="value">{% for m in agreement.minerals.all %}{{ m.name_ar }}{% if not forloop.last %}، {% endif %}{% empty %}—{% endfor %}</div></div>
+        <div class="cell half"><label>سريان الاتفاقية</label><div class="value">{{ agreement.get_validity_status_display }}</div></div>
+        <div class="cell full"><label>ملاحظات</label><div class="value">{{ agreement.notes|default:"—" }}</div></div>
+      </div>
+
+      <h3>الموقف المالي</h3>
+      {% if financial %}
+        <div class="slideshow-grid">
+          <div class="cell half"><label>المديونية</label><div class="value">{{ financial.debt|default:"—" }}</div></div>
+          <div class="cell half"><label>المطالبة الحالية</label><div class="value">{{ financial.current_claim|default:"—" }}</div></div>
+          <div class="cell half"><label>المطالبة المالية وفق العقد</label><div class="value">{{ financial.contractual_claim|default:"—" }}</div></div>
+          <div class="cell half"><label>تاريخ آخر سداد</label><div class="value">{{ financial.last_payment_date|default:"—" }}</div></div>
+          <div class="cell half"><label>الرصيد</label><div class="value">{{ financial.balance|default:"—" }}</div></div>
+          <div class="cell half"><label>مستوفي / غير مستوفي</label><div class="value">{% if financial.satisfied %}مستوفي{% else %}غير مستوفي{% endif %}</div></div>
+        </div>
+      {% else %}
+        <p class="help">لا يوجد موقف مالي مسجل.</p>
+      {% endif %}
+
+      <h3>الموقف الفني</h3>
+      {% if technical %}
+        <div class="slideshow-grid">
+          <div class="cell full"><label>برنامج العمل</label><div class="value">{{ technical.work_program|default:"—" }}</div></div>
+          <div class="cell full"><label>الموازنة</label><div class="value">{{ technical.budget|default:"—" }}</div></div>
+          <div class="cell full"><label>طريقة العمل</label><div class="value">{{ technical.work_method|default:"—" }}</div></div>
+          <div class="cell full"><label>التقارير الفنية والمالية</label><div class="value">{{ technical.tech_financial_reports|default:"—" }}</div></div>
+          <div class="cell full"><label>الموقف بالحقل</label><div class="value">{{ technical.field_status|default:"—" }}</div></div>
+          <div class="cell full"><label>الموقف الانتاجي</label><div class="value">{{ technical.production_status|default:"—" }}</div></div>
+          <div class="cell full"><label>ملخص النشاط الفني</label><div class="value">{{ technical.activity_summary|default:"—" }}</div></div>
+          <div class="cell half"><label>تاريخ إجازة خطة العمل</label><div class="value">{{ technical.work_plan_approval_date|default:"—" }}</div></div>
+          <div class="cell half"><label>طريقة المعالجة</label><div class="value">{{ technical.processing_method|default:"—" }}</div></div>
+        </div>
+      {% else %}
+        <p class="help">لا يوجد موقف فني مسجل.</p>
+      {% endif %}
+
+      <h3>الأحداث القانونية (السرد التاريخي)</h3>
+      {% if legal_events %}
+        <table>
+          <thead><tr><th>النوع</th><th>التاريخ</th><th>الوصف</th></tr></thead>
+          <tbody>
+            {% for event in legal_events %}
+              <tr><td>{{ event.get_event_type_display }}</td><td>{{ event.date|default:"—" }}</td><td>{{ event.description|default:"—" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="help">لا توجد أحداث قانونية.</p>
+      {% endif %}
+
+      <h3>الأحداث المالية (السرد التاريخي)</h3>
+      {% if financial_events %}
+        <table>
+          <thead><tr><th>النوع</th><th>التاريخ</th><th>المبلغ</th><th>الوصف</th></tr></thead>
+          <tbody>
+            {% for event in financial_events %}
+              <tr><td>{{ event.get_event_type_display }}</td><td>{{ event.date|default:"—" }}</td><td>{{ event.amount|default:"—" }}</td><td>{{ event.description|default:"—" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="help">لا توجد أحداث مالية.</p>
+      {% endif %}
+
+      <h3>الأحداث الفنية (السرد التاريخي للأعمال الفنية)</h3>
+      {% if technical_events %}
+        <table>
+          <thead><tr><th>النوع</th><th>التصنيف</th><th>التاريخ</th><th>الوصف</th></tr></thead>
+          <tbody>
+            {% for event in technical_events %}
+              <tr><td>{{ event.get_event_type_display }}</td><td>{{ event.category|default:"—" }}</td><td>{{ event.date|default:"—" }}</td><td>{{ event.description|default:"—" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="help">لا توجد أحداث فنية.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ------------------------------------------------ decision form #}
+  <div class="slideshow-section">
+    <h2>توصية اللجنة</h2>
+    <div class="body">
+      <form method="post" id="committee-form" action="{% url 'admin:applications_application_committee_slideshow' %}">
+        {% csrf_token %}
+        <input type="hidden" name="app_pk" value="{{ current.pk }}">
+        <input type="hidden" name="index" value="{{ index }}">
+        {{ form.non_field_errors }}
+        <div class="slideshow-grid">
+          <div class="cell half">
+            <label for="{{ form.committee_recommendation.id_for_label }}">{{ form.committee_recommendation.label }}</label>
+            {{ form.committee_recommendation }}
+            {{ form.committee_recommendation.errors }}
+          </div>
+          <div class="cell full">
+            <label for="{{ form.committee_recommendation_notes.id_for_label }}">{{ form.committee_recommendation_notes.label }}</label>
+            {{ form.committee_recommendation_notes }}
+            {{ form.committee_recommendation_notes.errors }}
+          </div>
+        </div>
+        <div class="submit-row">
+          <input type="submit" value="حفظ توصية اللجنة" class="default">
+        </div>
+      </form>
+    </div>
+  </div>
+
+{% endif %}
+{% endblock %}

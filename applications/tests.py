@@ -5,7 +5,15 @@ from django.core.management import call_command
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from companies.models import Agreement, Company, CompanyType, LegalEvent, TechnicalEvent
+from companies.models import (
+    Agreement,
+    Company,
+    CompanyType,
+    FinancialPosition,
+    LegalEvent,
+    TechnicalEvent,
+    TechnicalPosition,
+)
 
 from django.utils import timezone
 
@@ -759,6 +767,45 @@ class AppTypeContractFilterTests(TestCase):
         self.assertIn("data-apptype-contracts", html)
         self.assertIn("application_app_type.js", html)
 
+    def test_agreement_autocomplete_params_point_at_application_field(self):
+        """The agreement autocomplete widget must query the Application field
+        (source model + field name), not the related name."""
+        import re
+
+        from django.contrib.auth.models import User
+        from django.test import Client
+
+        admin = User.objects.create_superuser("su-autocmp", "a@e.com", "x")
+        client = Client()
+        client.force_login(admin)
+        html = client.get(reverse("admin:applications_application_add")).content.decode(
+            "utf-8"
+        )
+        select = re.search(r'<select name="agreement"[^>]*>', html).group(0)
+        self.assertIn("admin-autocomplete", select)
+        self.assertIn('data-app-label="applications"', select)
+        self.assertIn('data-model-name="application"', select)
+        self.assertIn('data-field-name="agreement"', select)
+
+    def test_app_type_autocomplete_params_point_at_application_field(self):
+        """The app_type autocomplete widget must query the Application field."""
+        import re
+
+        from django.contrib.auth.models import User
+        from django.test import Client
+
+        admin = User.objects.create_superuser("su-autocmp2", "a@e.com", "x")
+        client = Client()
+        client.force_login(admin)
+        html = client.get(reverse("admin:applications_application_add")).content.decode(
+            "utf-8"
+        )
+        select = re.search(r'<select name="app_type"[^>]*>', html).group(0)
+        self.assertIn("admin-autocomplete", select)
+        self.assertIn('data-app-label="applications"', select)
+        self.assertIn('data-model-name="application"', select)
+        self.assertIn('data-field-name="app_type"', select)
+
 
 class RequiredFieldTests(TestCase):
     @classmethod
@@ -1194,6 +1241,17 @@ class ReadonlyWorkflowTests(TestCase):
         html = client.get(change_url).content.decode("utf-8")
         self.assertNotIn('name="_save"', html)
         self.assertIn('name="_transition_to" value="under_processing"', html)
+
+    def test_add_page_still_has_save_buttons(self):
+        """Regression: the add page (obj is None) must keep the generic admin
+        save buttons — show_save_buttons has to be set there too."""
+        self.client.force_login(self.entry)
+        response = self.client.get(reverse("admin:applications_application_add"))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8")
+        self.assertIn('name="_save"', html)
+        self.assertIn('name="_addanother"', html)
+        self.assertIn('name="_continue"', html)
 
     def test_status_rendered_hidden_with_transition_buttons(self):
         app = self._draft()
@@ -1632,3 +1690,128 @@ class ForeignerPurposeFieldTests(TestCase):
         html = response.content.decode("utf-8")
         self.assertIn('<select name="f_2"', html)
         self.assertIn('<option value="كرت عمل">كرت عمل</option>', html)
+
+
+class CommitteeSlideshowTests(TestCase):
+    """The committee slideshow shows «قيد المعالجة» applications one by one."""
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        call_command("create_roles")
+        cls.manager = User.objects.create_user(
+            username="cs_manager", password="x", is_staff=True
+        )
+        cls.manager.groups.add(Group.objects.get(name="manager"))
+        cls.entry = User.objects.create_user(
+            username="cs_entry", password="x", is_staff=True
+        )
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
+        cls.company = Company.objects.create(
+            name_ar="شركة العرض", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        FinancialPosition.objects.create(agreement=cls.agreement, debt="100.00")
+        TechnicalPosition.objects.create(agreement=cls.agreement, processing_method="CIL")
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def _under_processing(self):
+        app = Application.objects.create(
+            agreement=self.agreement, app_type=self.work_plan, notes="ملاحظة"
+        )
+        app.transition_status(ApplicationStatus.SUBMITTED, self.entry)
+        app.transition_status(ApplicationStatus.UNDER_PROCESSING, self.manager)
+        # transition_status mutates the instance in memory; persist it so the
+        # slideshow's DB query (status=under_processing) sees it.
+        app.save()
+        return app
+
+    def _slideshow_url(self, index=None):
+        url = reverse("admin:applications_application_committee_slideshow")
+        return f"{url}?index={index}" if index is not None else url
+
+    def test_permission_denied_for_non_committee(self):
+        client = Client()
+        client.force_login(self.entry)
+        response = client.get(self._slideshow_url())
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_sees_application_and_full_agreement(self):
+        app = self._under_processing()
+        ApplicationField.objects.create(
+            application=app, label="تعليق على الخطة", value="تنفيذ"
+        )
+        client = Client()
+        client.force_login(self.manager)
+        response = client.get(self._slideshow_url())
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8")
+        self.assertIn("شركة العرض", html)  # company
+        self.assertIn("CIL", html)  # technical position
+        self.assertIn("الموقف المالي", html)  # financial section header
+        self.assertIn(self.work_plan.arabic_name, html)  # app type
+        self.assertIn("تنفيذ", html)  # dynamic field value
+        self.assertIn("توصية اللجنة", html)  # decision form
+
+    def test_empty_state(self):
+        client = Client()
+        client.force_login(self.manager)
+        response = client.get(self._slideshow_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "لا توجد طلبات قيد المعالجة حالياً")
+
+    def test_post_records_recommendation_and_advances(self):
+        app1 = self._under_processing()
+        app2 = self._under_processing()
+        client = Client()
+        client.force_login(self.manager)
+        response = client.post(
+            self._slideshow_url(index=0),
+            {
+                "app_pk": app1.pk,
+                "index": "0",
+                "committee_recommendation": "recommended",
+                "committee_recommendation_notes": "توافق اللجنة",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        app1.refresh_from_db()
+        self.assertEqual(app1.status, ApplicationStatus.COMMITTEE_RECOMMENDATION)
+        self.assertEqual(app1.committee_recommendation, "recommended")
+        self.assertEqual(app1.committee_recommendation_notes, "توافق اللجنة")
+        self.assertEqual(app1.committee_recommended_by, self.manager)
+        self.assertIsNotNone(app1.committee_recommended_at)
+        # auto-advance: index 0 now shows the remaining application (app2)
+        response = client.get(response.url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8")
+        self.assertIn(f'name="app_pk" value="{app2.pk}"', html)
+        self.assertNotIn(f'name="app_pk" value="{app1.pk}"', html)
+
+    def test_post_without_recommendation_rejected(self):
+        app = self._under_processing()
+        client = Client()
+        client.force_login(self.manager)
+        response = client.post(
+            self._slideshow_url(index=0),
+            {
+                "app_pk": app.pk,
+                "index": "0",
+                "committee_recommendation": "",
+                "committee_recommendation_notes": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "هذا الحقل مطلوب")
+        app.refresh_from_db()
+        self.assertEqual(app.status, ApplicationStatus.UNDER_PROCESSING)
+
+    def test_index_clamped(self):
+        self._under_processing()
+        client = Client()
+        client.force_login(self.manager)
+        response = client.get(self._slideshow_url(index=999))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "الطلب 1 من 1")
