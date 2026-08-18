@@ -84,18 +84,6 @@ class ApplicationTypeAdmin(admin.ModelAdmin):
     )
 
 
-class ApplicationDetailFieldInline(admin.TabularInline):
-    model = ApplicationDetailField
-    extra = 0
-
-
-@admin.register(ApplicationDetail)
-class ApplicationDetailAdmin(admin.ModelAdmin):
-    list_display = ("application", "category", "order")
-    search_fields = ("application__agreement__company__name_ar", "category")
-    inlines = [ApplicationDetailFieldInline]
-
-
 @admin.register(WorkingHoursSchedule)
 class WorkingHoursScheduleAdmin(admin.ModelAdmin):
     list_display = ("name", "start_date", "end_date", "work_start", "work_end", "working_weekdays")

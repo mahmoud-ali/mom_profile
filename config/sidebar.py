@@ -39,7 +39,6 @@ MODEL_ORDER = {
     "applications": [
         "application",
         "applicationtype",
-        "applicationdetail",
         "workinghoursschedule",
         "applicationtransition",
     ],

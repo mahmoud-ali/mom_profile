@@ -93,7 +93,6 @@ class SidebarOrderTests(TestCase):
             [
                 "application",
                 "applicationtype",
-                "applicationdetail",
                 "workinghoursschedule",
                 "applicationtransition",
             ],
