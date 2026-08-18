@@ -1,4 +1,5 @@
 import io
+import re
 
 from django.contrib.auth.models import Group, User
 from django.core.management import call_command
@@ -385,6 +386,36 @@ class ScopedAccessTests(TestCase):
             reverse("admin:companies_agreement_change", args=[self.exp_agr.pk])
         )
         self.assertEqual(resp.status_code, 200)
+
+    def _app_type_filter_options(self, response):
+        html = response.content.decode("utf-8")
+        match = re.search(
+            r'<details[^>]*data-filter-title="نوع الطلب".*?</details>', html, re.S
+        )
+        self.assertIsNotNone(match, "app_type filter block not found")
+        return set(re.findall(r"app_type__id__exact=(\d+)", match.group(0)))
+
+    def test_app_type_filter_scoped_shows_only_in_scope_types_with_apps(self):
+        client, _ = self._scoped_client()
+        resp = client.get(reverse("admin:applications_application_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        options = self._app_type_filter_options(resp)
+        # work_plan has an application in scope; gold's application is
+        # out of scope; AppTamdeed has no application at all.
+        self.assertEqual(options, {str(self.work_plan.pk)})
+
+    def test_app_type_filter_superuser_shows_types_with_apps(self):
+        admin = User.objects.create_superuser("su_typefilter", "t@t.com", "x")
+        client = Client()
+        client.force_login(admin)
+        resp = client.get(reverse("admin:applications_application_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        options = self._app_type_filter_options(resp)
+        tamdeed = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppTamdeed"
+        )
+        self.assertEqual(options, {str(self.work_plan.pk), str(self.gold.pk)})
+        self.assertNotIn(str(tamdeed.pk), options)
 
     def test_agreement_autocomplete_scoped(self):
         client, _ = self._scoped_client()

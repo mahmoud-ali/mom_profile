@@ -2,6 +2,7 @@ import json
 
 from django import forms
 from django.contrib import admin
+from django.contrib.admin import RelatedOnlyFieldListFilter
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
@@ -29,6 +30,18 @@ admin.site.title = "منصة خدمات الشركات"
 admin.site.site_title = "منصة خدمات الشركات"
 admin.site.site_header = "منصة خدمات الشركات"
 admin.site.site_url = None
+
+class UsedApplicationTypeFilter(RelatedOnlyFieldListFilter):
+    """Related-only app_type filter: shows only types that have applications.
+
+    RelatedOnlyFieldListFilter hides itself when there is a single used type
+    (len(choices) + 0 > 1); keep it visible whenever at least one type is
+    used so the filter is always available.
+    """
+
+    def has_output(self):
+        return len(self.lookup_choices) >= 1
+
 
 class ApplicationTypeForm(forms.ModelForm):
     """Renders event_label as a dropdown of the selected category's event types."""
@@ -98,7 +111,13 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     """
 
     list_display = ("agreement", "app_type", "status", "submitted_at", "reviewed_by")
-    list_filter = ("status", "agreement__company__company_type", "app_type")
+    # app_type filter shows only types that actually have applications
+    # (scope-aware: based on get_queryset, so scoped roles see their types only).
+    list_filter = (
+        "status",
+        "agreement__company__company_type",
+        ("app_type", UsedApplicationTypeFilter),
+    )
     search_fields = ("agreement__company__name_ar", "agreement__company__name_en", "notes")
     readonly_fields = (
         "submitted_at",
