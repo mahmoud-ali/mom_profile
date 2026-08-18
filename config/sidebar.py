@@ -54,8 +54,9 @@ MODEL_ORDER = {
 _original_get_app_list = admin.site.get_app_list
 
 
-def _get_app_list(request):
-    app_list = _original_get_app_list(request)
+def _get_app_list(request, app_label=None):
+    # app_label is passed by AdminSite.app_index for single-app pages.
+    app_list = _original_get_app_list(request, app_label)
 
     def app_key(app):
         try:
