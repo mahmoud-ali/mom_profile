@@ -6,8 +6,13 @@ from companies.models import Agreement
 
 from .models import (
     Application,
-    ApplicationStatus,
     ApplicationType,
+)
+from .workflow import (
+    ApplicationStatus,
+    ENTRY_FIELD_NAMES,
+    FINAL_DECISION_STATUSES,
+    entry_fields_for,
 )
 
 DETAIL_MAX_ROWS = 30
@@ -90,7 +95,20 @@ def build_application_form(app_type, instance=None):
         "Meta": type(
             "Meta",
             (),
-            {"model": Application, "fields": ["agreement", "app_type", "status", "notes"]},
+            {
+                "model": Application,
+                "fields": [
+                    "agreement",
+                    "app_type",
+                    "status",
+                    "notes",
+                    "committee_recommendation",
+                    "committee_recommendation_notes",
+                    "undersecretary_recommendation",
+                    "undersecretary_recommendation_notes",
+                    "minister_decision",
+                ],
+            },
         )
     }
 
@@ -112,7 +130,29 @@ def build_application_form(app_type, instance=None):
 
     def __init__(self, *args, **kwargs):
         forms.ModelForm.__init__(self, *args, **kwargs)
-        _filter_status_choices(self.fields["status"], self.instance, getattr(self, "current_user", None))
+        user = getattr(self, "current_user", None)
+        # Status is moved via dedicated transition buttons (the template posts
+        # `_transition_to`), so the field itself renders as a hidden input that
+        # carries the current status. The choices stay restricted to the
+        # current status + the user's allowed moves (defense in depth).
+        _filter_status_choices(
+            self.fields["status"], self.instance, getattr(self, "current_user", None)
+        )
+        self.fields["status"].widget = forms.HiddenInput()
+        # Once an application is submitted (any status past the draft) its data
+        # is frozen: only the status field may move it through the workflow.
+        readonly = (
+            self.instance is not None
+            and self.instance.pk
+            and self.instance.status != ApplicationStatus.DRAFT
+        )
+        if readonly:
+            for name in ("agreement", "notes"):
+                if name in self.fields:
+                    self.fields[name].disabled = True
+            for key in list(self.fields):
+                if key.startswith(("f_", "a_", "dt_")):
+                    self.fields[key].disabled = True
         if self.instance and self.instance.pk:
             self.fields["app_type"].disabled = True
             values = {f.label: f.value for f in self.instance.fields.all()}
@@ -135,6 +175,16 @@ def build_application_form(app_type, instance=None):
                             current = cells.get(col_label, "")
                             self.fields[key].initial = current
                             _append_existing_select_value(self.fields[key], current)
+        # Workflow data fields (committee/undersecretary recommendations and
+        # the minister's decision) are shown ONLY at the stage where they must
+        # be entered, and are mandatory there. Elsewhere they stay hidden and
+        # disabled so their stored values are never wiped on save.
+        status = self.instance.status if (self.instance and self.instance.pk) else None
+        entry_fields = set(entry_fields_for(status, user))
+        for name in ENTRY_FIELD_NAMES:
+            visible = name in entry_fields
+            self.fields[name].disabled = not visible
+            self.fields[name].required = visible
         # Restrict the type list to the agreement's company type AND contract type.
         agreement = None
         if self.instance and self.instance.agreement_id:
@@ -177,5 +227,39 @@ def build_application_form(app_type, instance=None):
             if hasattr(app_type_widget, "widget"):
                 app_type_widget.widget.attrs["data-apptype-contracts"] = app_type_map
 
+    def clean(self):
+        # Explicit superclass call: `super()` has no __class__ cell in this
+        # dynamically built class closure.
+        cleaned = forms.ModelForm.clean(self)
+        # The status field carries the current status; the intended move comes
+        # from the transition button (`_transition_to`) when one was clicked.
+        target = self.data.get("_transition_to") or cleaned.get("status")
+        if (
+            target == ApplicationStatus.COMMITTEE_RECOMMENDATION
+            and "committee_recommendation" not in self.errors
+            and not cleaned.get("committee_recommendation")
+        ):
+            self.add_error(
+                "committee_recommendation",
+                "يجب تحديد توصية اللجنة (موصى به أو غير موصى به).",
+            )
+        if (
+            target == ApplicationStatus.UNDERSECRETARY_RECOMMENDATION
+            and "undersecretary_recommendation" not in self.errors
+            and not cleaned.get("undersecretary_recommendation")
+        ):
+            self.add_error(
+                "undersecretary_recommendation",
+                "يجب تحديد توصية وكيل الوزارة (موصى به أو غير موصى به).",
+            )
+        if (
+            target in FINAL_DECISION_STATUSES
+            and "minister_decision" not in self.errors
+            and not cleaned.get("minister_decision")
+        ):
+            self.add_error("minister_decision", "يجب كتابة نص قرار الوزير.")
+        return cleaned
+
     attrs["__init__"] = __init__
+    attrs["clean"] = clean
     return type("DynamicApplicationForm", (forms.ModelForm,), attrs)

@@ -123,7 +123,16 @@ class CreateRolesTests(TestCase):
             }
             <= tech_perms
         )
-        self.assertFalse(tech_perms & {"can_review", "can_approve", "can_reject"})
+        self.assertFalse(
+            tech_perms
+            & {
+                "can_review",
+                "can_approve",
+                "can_reject",
+                "can_committee_recommend",
+                "can_undersecretary_recommend",
+            }
+        )
         # ApplicationType (procedure catalog) is manager-only
         self.assertFalse(any("applicationtype" in p for p in tech_perms))
 
@@ -145,7 +154,15 @@ class CreateRolesTests(TestCase):
 
         mgr_perms = _codenames(mgr)
         self.assertTrue(
-            {"can_review", "can_approve", "can_reject", "add_applicationtype", "view_applicationtype"}
+            {
+                "can_review",
+                "can_approve",
+                "can_reject",
+                "can_committee_recommend",
+                "can_undersecretary_recommend",
+                "add_applicationtype",
+                "view_applicationtype",
+            }
             <= mgr_perms
         )
 

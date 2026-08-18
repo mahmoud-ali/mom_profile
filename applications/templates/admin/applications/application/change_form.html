@@ -8,6 +8,7 @@
     <h2>استمارة الطلب — {{ app_type.arabic_name }}</h2>
 
     <style>
+      .form-row.field-status { display: none; }
       .dyn-field-grid .fieldBox { margin: 0 0 10px 0; }
       .dyn-field-grid .fieldBox input[type="text"],
       .dyn-field-grid .fieldBox input[type="date"],
@@ -100,11 +101,21 @@
   {% endif %}
 {% endblock %}
 
+{% block submit_buttons_top %}
+  {% if show_save_buttons %}{{ block.super }}{% endif %}
+{% endblock %}
+
 {% block submit_buttons_bottom %}
-  {{ block.super }}
-  {% if show_submit %}
+  {% if show_save_buttons %}{{ block.super }}{% endif %}
+  {% if transition_buttons %}
     <div class="submit-row" style="margin-top:6px">
-      <input type="submit" value="تأكيد الطلب" name="_submit_app" style="float:right">
+      <span style="float:right;padding:8px 12px;line-height:32px;font-weight:bold">تنفيذ إجراء:</span>
+      {% for value, label in transition_buttons %}
+        <button type="submit" name="_transition_to" value="{{ value }}"
+                style="float:right;margin:0 4px;padding:8px 16px;border:1px solid #79aec8;border-radius:4px;background:#417690;color:#fff;cursor:pointer;font-weight:bold">
+          {{ label }}
+        </button>
+      {% endfor %}
     </div>
   {% endif %}
 {% endblock %}

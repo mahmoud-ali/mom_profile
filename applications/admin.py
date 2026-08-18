@@ -19,11 +19,17 @@ from .models import (
     ApplicationDetail,
     ApplicationDetailField,
     ApplicationField,
-    ApplicationStatus,
     ApplicationType,
     EVENT_LABELS_BY_CATEGORY,
     WorkingHoursSchedule,
     valid_event_labels,
+)
+from .workflow import (
+    ENTRY_FIELD_NAMES,
+    ApplicationStatus,
+    FINAL_DECISION_STATUSES,
+    entry_fields_for,
+    is_editable,
 )
 
 admin.site.title = "منصة خدمات الشركات"
@@ -223,8 +229,19 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
 
     def get_fieldsets(self, request, obj=None):
         # Header fields plus the readonly workflow/audit panels; dynamic
-        # sections render via the custom template.
-        fields = ("agreement", "app_type", "status", "notes")
+        # sections render via the custom template. The workflow data fields
+        # (committee/undersecretary recommendations, minister's decision) are
+        # editable + mandatory only at the stage where they must be entered;
+        # once a value is recorded it stays visible as read-only (disabled)
+        # on every later stage so it never looks lost.
+        entry = []
+        if obj is not None and obj.pk:
+            shown = set(entry_fields_for(obj.status, request.user))
+            for name in ENTRY_FIELD_NAMES:
+                if getattr(obj, name, ""):
+                    shown.add(name)
+            entry = [name for name in ENTRY_FIELD_NAMES if name in shown]
+        fields = ("agreement", "app_type", "status", "notes", *entry)
         fields = (*fields, *self.get_readonly_fields(request, obj))
         return [(None, {"fields": fields})]
 
@@ -235,19 +252,50 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
                 raise PermissionDenied("يجب إنشاء الطلب كمسودة أولاً ثم تأكيده لاحقاً.")
             obj.status = ApplicationStatus.DRAFT
             obj.save()
+            self._save_dynamic(obj, form)
+            return
+        # The form already applied the posted status to the instance, so the
+        # state machine must see the ORIGINAL status to detect the move.
+        current_status = Application.objects.get(pk=obj.pk).status
+        transition_to = request.POST.get("_transition_to")
+        if transition_to:
+            target = transition_to
+        elif request.POST.get("_submit_app") and current_status == ApplicationStatus.DRAFT:
+            target = ApplicationStatus.SUBMITTED
         else:
-            # The form already applied the posted status to the instance, so the
-            # state machine must see the ORIGINAL status to detect the move.
-            current_status = Application.objects.get(pk=obj.pk).status
-            if request.POST.get("_submit_app") and current_status == ApplicationStatus.DRAFT:
-                target = ApplicationStatus.SUBMITTED
-            else:
-                target = new_status
+            target = new_status
+        if is_editable(current_status):
+            # Draft: normal editing + optional submission.
             if target != current_status:
                 obj.status = current_status
                 obj.transition_status(target, request.user)
             obj.save()
-        self._save_dynamic(obj, form)
+            self._save_dynamic(obj, form)
+        elif target != current_status:
+            # Frozen application: only a real status move may persist — the
+            # dynamic data is never rewritten here (skipping _save_dynamic
+            # keeps the submitted values, attachments and details intact).
+            obj.status = current_status
+            recommendation, notes, minister_decision = None, "", ""
+            if target == ApplicationStatus.COMMITTEE_RECOMMENDATION:
+                recommendation = form.cleaned_data.get("committee_recommendation")
+                notes = form.cleaned_data.get("committee_recommendation_notes") or ""
+            elif target == ApplicationStatus.UNDERSECRETARY_RECOMMENDATION:
+                recommendation = form.cleaned_data.get("undersecretary_recommendation")
+                notes = (
+                    form.cleaned_data.get("undersecretary_recommendation_notes") or ""
+                )
+            elif target in FINAL_DECISION_STATUSES:
+                minister_decision = form.cleaned_data.get("minister_decision") or ""
+            obj.transition_status(
+                target,
+                request.user,
+                recommendation=recommendation,
+                notes=notes,
+                minister_decision=minister_decision,
+            )
+            obj.save()
+        # else: no transition on a frozen application -> posted edits are discarded.
 
     def _save_dynamic(self, obj, form):
         at = obj.app_type
@@ -330,10 +378,21 @@ class ApplicationAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
                         cols.append((col_label, form[key]))
                 cat_field = form[f"dt_{row}_cat"] if f"dt_{row}_cat" in form.fields else None
                 context["detail_rows"].append({"row": row, "cat": cat_field, "cols": cols})
-            context["show_submit"] = (
-                change
-                and obj.status in (ApplicationStatus.DRAFT, ApplicationStatus.REJECTED)
-                and request.user.has_perm("applications.can_submit")
+            # Transition buttons: one per status this user may move the
+            # application to. After the draft the generic admin save buttons
+            # are hidden — the transition buttons are the only way forward.
+            labels = dict(ApplicationStatus.choices)
+            context["transition_buttons"] = []
+            if change:
+                for target in sorted(obj.allowed_next_statuses(request.user)):
+                    if target == obj.status:
+                        continue
+                    label = labels.get(target, target)
+                    if target == ApplicationStatus.SUBMITTED:
+                        label = "تأكيد الطلب"
+                    context["transition_buttons"].append((target, label))
+            context["show_save_buttons"] = add or (
+                obj is not None and obj.status == ApplicationStatus.DRAFT
             )
         return super().render_change_form(
             request, context, add=add, change=change, form_url=form_url, obj=obj

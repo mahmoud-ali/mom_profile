@@ -1,26 +1,24 @@
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import models
-from django.utils import timezone
 
 from companies.models import (
     Agreement,
     CompanyType,
-    FinancialEvent,
     FinancialEventType,
-    LegalEvent,
     LegalEventType,
-    TechnicalEvent,
     TechnicalEventType,
 )
 
-
-class ApplicationStatus(models.TextChoices):
-    DRAFT = "draft", "مسودة"
-    SUBMITTED = "submitted", "مؤكد"
-    UNDER_PROCESSING = "under_processing", "قيد المعالجة"
-    APPROVED = "approved", "مجاز"
-    REJECTED = "rejected", "مرفوض"
+from .workflow import (
+    ApplicationStatus,
+    Recommendation,
+    WORKFLOW_PERMISSIONS,
+    allowed_next_statuses_for,
+    anchor_creation,
+    can_transition,
+    transition_application,
+)
 
 
 class EventCategory(models.TextChoices):
@@ -165,34 +163,16 @@ class ApplicationType(models.Model):
 class Application(models.Model):
     """A submitted procedure request for a company.
 
-    Status workflow (enforced by transition_status):
-      DRAFT -> SUBMITTED                       (data entry / manager)
-      SUBMITTED -> UNDER_PROCESSING            (manager)
-      UNDER_PROCESSING -> APPROVED | REJECTED  (manager)
-      REJECTED -> DRAFT                        (resubmit)
+    The status machine (statuses, transitions, permissions and side effects)
+    lives in applications/workflow.py; this model keeps thin wrappers so the
+    workflow is centralized in one module.
     """
-
-    # Allowed transitions: current -> {next}
-    TRANSITIONS = {
-        ApplicationStatus.DRAFT: {ApplicationStatus.SUBMITTED},
-        ApplicationStatus.SUBMITTED: {ApplicationStatus.UNDER_PROCESSING},
-        ApplicationStatus.UNDER_PROCESSING: {
-            ApplicationStatus.APPROVED,
-            ApplicationStatus.REJECTED,
-        },
-        ApplicationStatus.REJECTED: {ApplicationStatus.DRAFT},
-    }
 
     class Meta:
         verbose_name = "طلب"
         verbose_name_plural = "الطلبات"
         ordering = ["-created_at"]
-        permissions = [
-            ("can_submit", "يمكنه تأكيد الطلبات"),
-            ("can_review", "يمكنه مراجعة الطلبات (قيد المعالجة)"),
-            ("can_approve", "يمكنه اعتماد الطلبات"),
-            ("can_reject", "يمكنه رفض الطلبات"),
-        ]
+        permissions = WORKFLOW_PERMISSIONS
 
     agreement = models.ForeignKey(
         Agreement,
@@ -208,7 +188,7 @@ class Application(models.Model):
     )
     status = models.CharField(
         "الحالة",
-        max_length=20,
+        max_length=32,
         choices=ApplicationStatus.choices,
         default=ApplicationStatus.DRAFT,
     )
@@ -231,6 +211,45 @@ class Application(models.Model):
         related_name="reviewed_applications",
     )
     notes = models.TextField("ملاحظات", blank=True)
+    committee_recommendation = models.CharField(
+        "توصية اللجنة",
+        max_length=20,
+        choices=Recommendation.choices,
+        null=True,
+        blank=True,
+    )
+    committee_recommendation_notes = models.TextField("ملاحظات توصية اللجنة", blank=True)
+    committee_recommended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="مقدم توصية اللجنة",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="committee_recommended_applications",
+    )
+    committee_recommended_at = models.DateTimeField("تاريخ توصية اللجنة", null=True, blank=True)
+    undersecretary_recommendation = models.CharField(
+        "توصية وكيل الوزارة",
+        max_length=20,
+        choices=Recommendation.choices,
+        null=True,
+        blank=True,
+    )
+    undersecretary_recommendation_notes = models.TextField(
+        "ملاحظات توصية وكيل الوزارة", blank=True
+    )
+    undersecretary_recommended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="مقدم توصية وكيل الوزارة",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="undersecretary_recommended_applications",
+    )
+    undersecretary_recommended_at = models.DateTimeField(
+        "تاريخ توصية وكيل الوزارة", null=True, blank=True
+    )
+    minister_decision = models.TextField("قرار الوزير", blank=True)
     created_at = models.DateTimeField("تاريخ الإنشاء", auto_now_add=True)
     updated_at = models.DateTimeField("آخر تحديث", auto_now=True)
 
@@ -242,9 +261,7 @@ class Application(models.Model):
         super().save(*args, **kwargs)
         if creating:
             # Anchor the timeline: the first entry (None -> draft) at creation.
-            ApplicationTransition.objects.create(
-                application=self, from_status=None, to_status=self.status
-            )
+            anchor_creation(self)
 
     def clean(self):
         if self.agreement_id and self.app_type_id:
@@ -259,110 +276,32 @@ class Application(models.Model):
                     {"app_type": "نوع الطلب غير مسموح به لنوع عقد الاتفاقية الحالي."}
                 )
 
-    # ------------------------------------------------------------------ workflow
-
-    def _perm_for(self, new_status):
-        return {
-            ApplicationStatus.SUBMITTED: "applications.can_submit",
-            ApplicationStatus.UNDER_PROCESSING: "applications.can_review",
-            ApplicationStatus.APPROVED: "applications.can_approve",
-            ApplicationStatus.REJECTED: "applications.can_reject",
-        }.get(new_status)
+    # -------------------------------------------------------- workflow wrappers
+    # The state machine itself lives in applications/workflow.py; these thin
+    # wrappers keep a stable API for the admin, forms and tests.
 
     def allowed_next_statuses(self, user):
         """Statuses this user may move the application to (excluding the current one)."""
-        allowed = self.TRANSITIONS.get(self.status, set())
-        result = set()
-        for target in allowed:
-            if user is not None and user.is_authenticated and user.is_superuser:
-                result.add(target)
-                continue
-            if user is not None and user.is_authenticated:
-                perm = self._perm_for(target)
-                if perm is None or user.has_perm(perm):
-                    result.add(target)
-            elif target == ApplicationStatus.DRAFT:
-                result.add(target)
-        return result
+        return allowed_next_statuses_for(self.status, user)
 
     def can_transition_to(self, new_status, user):
-        return new_status in self.allowed_next_statuses(user)
+        return can_transition(self.status, new_status, user)
 
-    def transition_status(self, new_status, user):
-        """Move the application to new_status, enforcing role-based workflow.
+    def transition_status(self, new_status, user, recommendation=None, notes="", minister_decision=""):
+        """Move the application to new_status, enforcing the role-based workflow.
 
-        Raises PermissionDenied on an invalid transition or missing permission.
-        Logs a historical event when the application is approved.
+        Raises PermissionDenied on an invalid transition, a missing permission,
+        or a missing mandatory entry (recommendation decision / minister's
+        decision) when entering the corresponding stage. Logs a historical
+        event when the application is approved.
         """
-        if new_status == self.status:
-            return
-        if new_status not in self.TRANSITIONS.get(self.status, set()):
-            raise PermissionDenied(
-                f"لا يمكن الانتقال من «{self.get_status_display()}» إلى "
-                f"«{dict(ApplicationStatus.choices).get(new_status, new_status)}»."
-            )
-        if user is not None and not user.is_superuser:
-            perm = self._perm_for(new_status)
-            if perm and not user.has_perm(perm):
-                raise PermissionDenied(f"ليست لديك صلاحية تنفيذ هذا الإجراء ({perm}).")
-        old_status = self.status
-        self.status = new_status
-        now = timezone.now()
-        if new_status == ApplicationStatus.SUBMITTED:
-            self.submitted_at = now
-            self.submitted_by = user
-        if new_status in (ApplicationStatus.APPROVED, ApplicationStatus.REJECTED):
-            self.reviewed_at = now
-            self.reviewed_by = user
-        if new_status == ApplicationStatus.APPROVED:
-            self.log_approved_event()
-        from .business_time import working_seconds_between
-
-        previous = self.transitions.order_by("-timestamp", "-id").first()
-        duration_seconds = None
-        if previous is not None and previous.timestamp is not None:
-            duration_seconds = working_seconds_between(previous.timestamp, timezone.now())
-        ApplicationTransition.objects.create(
-            application=self,
-            from_status=old_status,
-            to_status=new_status,
-            user=user,
-            duration_seconds=duration_seconds,
-        )
-
-    # ---------------------------------------------------------- approval -> event
-
-    EVENT_MODEL_MAP = {
-        EventCategory.LEGAL: LegalEvent,
-        EventCategory.FINANCIAL: FinancialEvent,
-        EventCategory.TECHNICAL: TechnicalEvent,
-    }
-
-    def log_approved_event(self):
-        """Record one historical event (legal/financial/technical) for an approved
-        application. Idempotent: skips when an event is already linked to it."""
-        at = self.app_type
-        if not at.event_category or not at.event_label:
-            return
-        model_cls = self.EVENT_MODEL_MAP.get(at.event_category)
-        if model_cls is None:
-            return
-        if model_cls.objects.filter(application=self).exists():
-            return
-        label = at.event_label
-        # Fall back to "other" when the label is not a valid choice value.
-        valid_values = [v for v, _ in model_cls._meta.get_field("event_type").choices]
-        if label not in valid_values:
-            label = "other"
-        description = f"طلب: {at.arabic_name}"
-        if self.notes:
-            description += f" — {self.notes}"
-        model_cls.objects.create(
-            agreement=self.agreement,
-            event_type=label,
-            date=timezone.localdate(),
-            description=description,
-            application=self,
+        transition_application(
+            self,
+            new_status,
+            user,
+            recommendation=recommendation,
+            notes=notes,
+            minister_decision=minister_decision,
         )
 
 
@@ -386,12 +325,12 @@ class ApplicationTransition(models.Model):
     )
     from_status = models.CharField(
         "من الحالة",
-        max_length=20,
+        max_length=32,
         choices=ApplicationStatus.choices,
         null=True,
         blank=True,
     )
-    to_status = models.CharField("إلى الحالة", max_length=20, choices=ApplicationStatus.choices)
+    to_status = models.CharField("إلى الحالة", max_length=32, choices=ApplicationStatus.choices)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="المستخدم",

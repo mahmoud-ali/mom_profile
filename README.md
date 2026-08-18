@@ -38,12 +38,39 @@ created/deleted only via create_roles.
   catalog (manager-only) or financial data.
 - financial_data_entry — adds/edits FinancialPosition and FinancialEvent for
   ALL companies; no application or catalog access.
-- manager — advances to under-processing and approves or rejects
-  (مؤكد -> قيد المعالجة -> مجاز / مرفوض); full company-file editing; the
-  ApplicationType (إجراءات) catalog is manager-only.
+- manager — advances the review pipeline and decides the outcome
+  (مؤكد -> قيد المعالجة -> توصية اللجنة -> توصية وكيل الوزارة -> معتمد / مرفوض);
+  each recommendation stage records a decision (موصى به / غير موصى به) plus
+  notes and who/when. Full company-file editing; the ApplicationType (إجراءات)
+  catalog is manager-only.
+- Once an application is submitted (any status past مسودة) it becomes
+  read-only: the form data, attachments, details, header and notes are frozen;
+  only the status field moves it through the workflow for users holding the
+  matching permission. Rejected applications return to مسودة for resubmission,
+  which clears the recommendation cycle.
 - When a manager approves an application, one historical event is created
   automatically on the application's agreement (idempotent, no duplicates).
 - superuser bypasses all checks and scoping.
+
+The whole state machine — statuses, allowed transitions, per-step permissions,
+editability rules, transition history and the approval side effect — lives in
+one module, `applications/workflow.py`, and is consumed by the model, admin,
+forms and KPIs.
+
+The application change page hides the status field entirely: the user moves the
+application forward with one dedicated button per allowed next status (تأكيد
+الطلب، قيد المعالجة، توصية اللجنة، توصية وكيل الوزارة، معتمد، مرفوض), rendered
+from `allowed_next_statuses`. Once the application leaves the draft the generic
+admin save buttons (احفظ / احفظ وأضف آخر / احفظ واستمر بالتعديل) are hidden —
+the transition buttons are the only way forward, so a draft edit never gets
+mistaken for a workflow step. The workflow data fields are editable and
+mandatory only at the stage where they must be entered: «توصية اللجنة» +
+ملاحظاتها when moving قيد المعالجة → توصية اللجنة, «توصية وكيل الوزارة» +
+ملاحظاتها when moving توصية اللجنة → توصية وكيل الوزارة, and the «قرار الوزير»
+text box (the minister's written decision) when moving توصية وكيل الوزارة →
+معتمد/مرفوض. Once a value is recorded it stays visible (read-only) on every
+later stage, including the final one, so nothing looks lost.
+
 
 ## Type-driven application forms
 
@@ -55,7 +82,8 @@ Every application is entered through a form generated from its ApplicationType
   (date inputs for date-like labels), one file input per attachments label, and
   detail rows whose columns come from detail_fields (with a category dropdown
   when detail_models has categories, e.g. requirements-list),
-- a "تأكيد الطلب" button confirms the draft when the user has can_submit.
+- a "تأكيد الطلب" transition button (تأكيد الطلب) confirms the draft when the
+  user has can_submit; every workflow step is a button, not a dropdown.
 
 Labels are locked to the type; generic free-typed label rows are not used in the
 entry flow. Approved applications still log one event on the agreement.
@@ -145,9 +173,11 @@ and agreement number); --dry-run validates inside a rolled-back transaction.
   Agreement.locality is a FK to Locality; the admin filters the locality
   dropdown by the selected state (dependent JS), and Agreement.clean() rejects
   a locality whose state does not match the agreement's state.
-- applications/ — ApplicationType catalog, Application with the role-based
-  status machine, dynamic type-driven forms (forms.py + custom change_form
-  template), attachments/fields/details, and the load_app_types command.
+- applications/ — ApplicationType catalog, the Application model, the
+  centralized workflow module (workflow.py: statuses, transitions, per-step
+  permissions and the state machine), dynamic type-driven forms (forms.py +
+  custom change_form template), attachments/fields/details, and the
+  load_app_types command.
 - roles/ — central role management: ROLE_DEFINITIONS (single source of truth),
   the create_roles command, StaffProfile (per-user company-type scope), the
   company-type scoping mixin, and the admin "الأدوار" section (role list +

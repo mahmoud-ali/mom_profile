@@ -16,10 +16,10 @@
     <div style="font-size:1.8em">{{ kpis.total }}</div><div>إجمالي الطلبات</div>
   </div>
   <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
-    <div style="font-size:1.8em">{{ kpis.approval_rate|floatformat:1 }}%</div><div>نسبة الاعتماد (مجاز / مقرر)</div>
+    <div style="font-size:1.8em">{{ kpis.approval_rate|floatformat:1 }}%</div><div>نسبة الاعتماد (معتمد / مرفوض)</div>
   </div>
   <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
-    <div style="font-size:1.8em">{{ kpis.backlog_count }}</div><div>طلبات قيد المعالجة</div>
+    <div style="font-size:1.8em">{{ kpis.backlog_count }}</div><div>طلبات قيد المراجعة</div>
   </div>
   <div style="flex:1;min-width:180px;border:1px solid #ccc;border-radius:6px;padding:12px;text-align:center">
     <div style="font-size:1.8em">{% if kpis.backlog_oldest_days %}{{ kpis.backlog_oldest_days }}{% else %}0{% endif %}</div><div>أقدم طلب قيد المعالجة (أيام)</div>
@@ -63,7 +63,7 @@
   <thead><tr>
     <th style="border:1px solid #ddd;padding:6px">المستخدم</th>
     <th style="border:1px solid #ddd;padding:6px">عدد التحولات</th>
-    <th style="border:1px solid #ddd;padding:6px">قرارات (مجاز/مرفوض)</th>
+    <th style="border:1px solid #ddd;padding:6px">قرارات (معتمد/مرفوض)</th>
     <th style="border:1px solid #ddd;padding:6px">متوسط مدة القرار (يوم)</th>
   </tr></thead>
   <tbody>

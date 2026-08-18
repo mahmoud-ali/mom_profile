@@ -20,7 +20,7 @@ class Command(BaseCommand):
             f"approval rate {kpis['approval_rate']}%"
         )
         self.stdout.write(
-            f"Backlog (قيد المعالجة): {kpis['backlog_count']} — "
+            f"Backlog (قيد المراجعة): {kpis['backlog_count']} — "
             f"oldest {kpis['backlog_oldest_days'] or 0} days"
         )
         self.stdout.write("Stage durations (from ← to): count, avg_days, median_days, max_days")

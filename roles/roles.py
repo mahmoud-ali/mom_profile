@@ -11,6 +11,8 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 
+from applications.workflow import WORKFLOW_PERMISSION_CODENAMES
+
 TECHNICAL_DATA_ENTRY = "technical_data_entry"
 FINANCIAL_DATA_ENTRY = "financial_data_entry"
 MANAGER = "manager"
@@ -48,14 +50,14 @@ ROLE_DEFINITIONS = {
     MANAGER: {
         "arabic_name": "مدير",
         "description": (
-            "التحكم الكامل في سير الطلبات (قيد المعالجة / مجاز / مرفوض) مع "
-            "إضافة وتعديل بيانات الشركات والملفات؛ كتالوج الإجراءات للمدير فقط."
+            "التحكم الكامل في سير الطلبات (قيد المعالجة / توصية اللجنة / "
+            "توصية وكيل الوزارة / معتمد / مرفوض) مع إضافة وتعديل بيانات "
+            "الشركات والملفات؛ كتالوج الإجراءات للمدير فقط."
         ),
         "company_scoped": False,
         "permissions": {
             "applications.application": [
-                "add", "change", "view",
-                "can_submit", "can_review", "can_approve", "can_reject",
+                "add", "change", "view", *WORKFLOW_PERMISSION_CODENAMES,
             ],
             "applications.applicationtype": ["add", "change", "view"],
             "companies.company": ["add", "change", "view"],

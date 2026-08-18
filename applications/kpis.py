@@ -4,7 +4,8 @@ from datetime import timedelta
 from django.db.models import Count
 from django.utils import timezone
 
-from .models import Application, ApplicationStatus, ApplicationTransition
+from .models import Application, ApplicationTransition
+from .workflow import ApplicationStatus, REVIEW_STATUSES
 
 STATUS_LABELS = dict(ApplicationStatus.choices)
 
@@ -113,11 +114,11 @@ def compute_kpis(days=None):
     )
     approved = decided_qs.filter(status=ApplicationStatus.APPROVED).count()
     decided = decided_qs.count()
-    backlog_qs = Application.objects.filter(status=ApplicationStatus.UNDER_PROCESSING)
+    backlog_qs = Application.objects.filter(status__in=REVIEW_STATUSES)
     oldest_backlog = None
     for app in backlog_qs:
         last = (
-            app.transitions.filter(to_status=ApplicationStatus.UNDER_PROCESSING)
+            app.transitions.filter(to_status__in=REVIEW_STATUSES)
             .order_by("-timestamp")
             .first()
         )
