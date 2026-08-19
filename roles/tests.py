@@ -2,6 +2,7 @@ import io
 import re
 
 from django.contrib.auth.models import Group, User
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -930,3 +931,128 @@ class AssignmentPageTests(TestCase):
         client.post(url, {f"role_{user.pk}": ""})
         self.assertFalse(user.groups.filter(name__in=MANAGED_ROLES).exists())
         self.assertEqual(list(StaffProfile.objects.get(user=user).company_types), [])
+
+
+class RoleHelperEdgeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("create_roles")
+
+    def test_apply_unknown_role_raises(self):
+        user = _make_user("unknownrole")
+        with self.assertRaises(ValueError):
+            apply_role_to_user(user, "bogus_role")
+
+    def test_scoped_without_profile_sees_empty(self):
+        user = _make_user("noprofile")
+        user.groups.add(Group.objects.get(name="technical_data_entry"))
+        self.assertEqual(scoped_company_types(user), [])
+
+
+class StaffProfileModelTests(TestCase):
+    def test_clean_rejects_unknown_company_type(self):
+        user = _make_user("profile1")
+        profile = StaffProfile(user=user, company_types=["bogus"])
+        with self.assertRaises(ValidationError):
+            profile.full_clean()
+
+    def test_str(self):
+        user = _make_user("profile2")
+        profile = StaffProfile.objects.create(user=user)
+        self.assertEqual(str(profile), "ملف profile2")
+
+
+class RoleAdminDisplayTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("create_roles")
+
+    def test_display_methods(self):
+        from django.contrib import admin as dj_admin
+
+        from roles.admin import RoleAdmin, Role
+
+        ma = RoleAdmin(Role, dj_admin.site)
+        tech = Role.objects.get(name="technical_data_entry")
+        manager = Role.objects.get(name="manager")
+
+        self.assertEqual(ma.arabic_name(tech), "مدخل بيانات فني")
+        self.assertEqual(ma.scope_label(tech), "حسب أنواع الشركات")
+        self.assertEqual(ma.scope_label(manager), "جميع الشركات")
+        self.assertEqual(ma.member_count(tech), 0)
+
+        # arabic_name falls back to the raw name for unknown roles
+        Group.objects.create(name="custom_group")
+        custom = Role.objects.get(name="custom_group")
+        self.assertEqual(ma.arabic_name(custom), "custom_group")
+
+        # permissions_summary: empty -> "—", many -> truncated with ellipsis
+        self.assertEqual(ma.permissions_summary(custom), "—")
+        summary = ma.permissions_summary(tech)
+        self.assertTrue(summary.endswith(" …"))
+        self.assertIn("add_application", summary)
+
+    def test_sync_permissions_action(self):
+        from django.contrib import admin as dj_admin
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from django.test import RequestFactory
+
+        from roles.admin import RoleAdmin, Role
+
+        tech = Group.objects.get(name="technical_data_entry")
+        tech.permissions.clear()
+        ma = RoleAdmin(Role, dj_admin.site)
+        request = RequestFactory().get("/")
+        request.user = User.objects.create_superuser("su_sync", "s@s.com", "x")
+        setattr(request, "session", "session")
+        request._messages = FallbackStorage(request)
+        ma.sync_permissions(request, Role.objects.filter(name="technical_data_entry"))
+        self.assertTrue(tech.permissions.exists())
+
+
+class AssignmentViewInvalidTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("create_roles")
+
+    def test_assignment_post_ignores_invalid_user_ids(self):
+        admin = User.objects.create_superuser("su_assign2", "a@a.com", "x")
+        client = Client()
+        client.force_login(admin)
+        url = reverse("admin:roles_role_assignment")
+        resp = client.post(url, {"role_notanumber": "manager", "role_999999": "manager"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_retired_group_empty_warns_no_members(self):
+        Group.objects.create(name="data_entry")
+        buf = io.StringIO()
+        call_command("create_roles", stdout=buf)
+        self.assertIn("has no members", buf.getvalue())
+
+
+class SidebarUnknownAppTests(TestCase):
+    def test_app_not_in_order_sorted_last(self):
+        import config.sidebar as sb
+        from unittest import mock
+
+        fake = [
+            {"app_label": "unknownapp", "models": []},
+            {"app_label": "companies", "models": []},
+        ]
+        with mock.patch.object(sb, "_original_get_app_list", return_value=fake):
+            app_list = sb._get_app_list(None)
+        self.assertEqual([a["app_label"] for a in app_list], ["companies", "unknownapp"])
+
+
+class StaticUrlsTests(TestCase):
+    def test_static_urls_added_when_debug(self):
+        import importlib
+
+        import config.urls
+
+        with self.settings(DEBUG=True):
+            importlib.reload(config.urls)
+            self.assertTrue(
+                any("media" in str(p.pattern) for p in config.urls.urlpatterns)
+            )
+        importlib.reload(config.urls)  # restore (DEBUG is False again)

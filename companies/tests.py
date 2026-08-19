@@ -1,6 +1,8 @@
+import io
 import os
 import tempfile
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase
 
 from .models import (
@@ -13,6 +15,7 @@ from .models import (
     LegalEvent,
     Locality,
     Mineral,
+    Nationality,
     State,
     TechnicalPosition,
     contract_type_options,
@@ -458,3 +461,290 @@ class LocalityTests(TestCase):
         self.assertIn("data-locality-map", html)
         self.assertIn("data-companies", html)
         self.assertIn("agreement_contract_type.js", html)
+
+
+class SeedReferenceCommandTests(TestCase):
+    def test_seeds_all_reference_data(self):
+        from applications.models import WorkingHoursSchedule
+
+        from .models import NATIONALITY_NAMES
+
+        call_command("seed_reference")
+        self.assertEqual(State.objects.count(), 18)
+        self.assertEqual(Mineral.objects.count(), 10)
+        self.assertEqual(Nationality.objects.count(), len(NATIONALITY_NAMES))
+        self.assertTrue(Locality.objects.filter(name_ar="أم درمان").exists())
+        schedule = WorkingHoursSchedule.objects.get()
+        self.assertEqual(schedule.working_weekdays, [0, 1, 2, 3, 6])
+
+    def test_idempotent(self):
+        from applications.models import WorkingHoursSchedule
+
+        call_command("seed_reference")
+        call_command("seed_reference")
+        self.assertEqual(State.objects.count(), 18)
+        self.assertEqual(Mineral.objects.count(), 10)
+        self.assertEqual(WorkingHoursSchedule.objects.count(), 1)
+
+    def test_updates_stale_nationality_names(self):
+        Nationality.objects.create(code="1", name_ar="قديم")
+        call_command("seed_reference")
+        self.assertEqual(Nationality.objects.get(code="1").name_ar, "سودانية")
+
+    def test_missing_state_in_localities_skipped(self):
+        from unittest import mock
+
+        from companies.management.commands import seed_reference as sr_mod
+
+        with mock.patch.object(
+            sr_mod, "EXAMPLE_LOCALITIES", {"ولاية غير موجودة": ["محلية"]}
+        ):
+            call_command("seed_reference")
+        self.assertFalse(Locality.objects.filter(name_ar="محلية").exists())
+
+
+class ModelStrTests(TestCase):
+    def test_nationality_str_falls_back_to_code(self):
+        self.assertEqual(str(Nationality.objects.create(code="99")), "99")
+
+    def test_block_str(self):
+        self.assertEqual(str(Block.objects.create(code="BLK-X")), "BLK-X")
+
+
+class AuditSetupTests(TestCase):
+    def test_audit_history_html_empty_and_unsaved(self):
+        from companies.audit_setup import audit_history_html
+
+        self.assertEqual(audit_history_html(None), "—")
+        self.assertEqual(audit_history_html(Company(name_ar="x")), "—")
+
+    def test_audit_history_html_limit_zero(self):
+        from companies.audit_setup import audit_history_html
+
+        company = Company.objects.create(name_ar="شركة حد")
+        self.assertEqual(audit_history_html(company, limit=0), "—")
+
+    def test_audit_history_html_variant_changes(self):
+        from auditlog.models import LogEntry
+        from django.contrib.contenttypes.models import ContentType
+
+        from companies.audit_setup import audit_history_html
+
+        company = Company.objects.create(name_ar="شركة تنسيق")
+        ct = ContentType.objects.get_for_model(Company)
+        LogEntry.objects.create(
+            content_type=ct,
+            object_pk=str(company.pk),
+            object_id=company.pk,
+            object_repr="x",
+            action=LogEntry.Action.UPDATE,
+            changes={"name_ar": ["قبل", "بعد"]},
+        )
+        LogEntry.objects.create(
+            content_type=ct,
+            object_pk=str(company.pk),
+            object_id=company.pk,
+            object_repr="x",
+            action=LogEntry.Action.UPDATE,
+            changes={"website": "scalar-value"},
+        )
+        LogEntry.objects.create(
+            content_type=ct,
+            object_pk=str(company.pk),
+            object_id=company.pk,
+            object_repr="x",
+            action=LogEntry.Action.UPDATE,
+            changes="plain-string-changes",
+        )
+        html = audit_history_html(company)
+        self.assertIn("name_ar", html)
+        self.assertIn("website", html)
+        self.assertIn("plain-string-changes", html)
+
+    def test_registered_models(self):
+        from companies.audit_setup import registered_models
+
+        models = registered_models()
+        self.assertIn(Company, models)
+        self.assertIn(Agreement, models)
+
+
+class AgreementAdminFormPostDataTests(TestCase):
+    def test_invalid_company_and_state_in_post_data(self):
+        from companies.admin import AgreementAdminForm
+
+        # The form must not raise when the posted company/state ids are invalid.
+        form = AgreementAdminForm(data={"company": "not-a-pk", "state": "also-bad"})
+        self.assertIn("contract_type", form.fields)
+        form2 = AgreementAdminForm(data={"company": "999999", "state": "888888"})
+        self.assertIn("contract_type", form2.fields)
+
+
+class ImportCommandEdgeCaseTests(TestCase):
+    COMPANY_HEADER = (
+        "id,company_type,code,name_ar,name_en,nationality,address,website,"
+        "manager_name,manager_phone,rep_name,rep_phone,email,status"
+    )
+    AGREEMENT_HEADER = (
+        "id,شركة,نوع الشركة,رقم الاتفاقية/العقد,النوع,تاريح البداية,تاريخ النهاية,"
+        "عدد الرخص,الولاية,المحلية,رقم المربع,المعدن,حالة الاتفاقية/العقد"
+    )
+    COMPANY_COLS = [
+        "id", "company_type", "code", "name_ar", "name_en", "nationality",
+        "address", "website", "manager_name", "manager_phone", "rep_name",
+        "rep_phone", "email", "status",
+    ]
+    AGREEMENT_COLS = [
+        "id", "شركة", "نوع الشركة", "رقم الاتفاقية/العقد", "النوع", "تاريح البداية",
+        "تاريخ النهاية", "عدد الرخص", "الولاية", "المحلية", "رقم المربع", "المعدن",
+        "حالة الاتفاقية/العقد",
+    ]
+
+    def _row(self, cols, values):
+        return ",".join(str(values.get(c, "")) for c in cols) + "\n"
+
+    def _run(self, companies_rows, agreements_rows="", **kwargs):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "companies.csv"), "w", encoding="utf-8") as fh:
+            fh.write(self.COMPANY_HEADER + "\n" + companies_rows)
+        with open(os.path.join(d, "agreements.csv"), "w", encoding="utf-8") as fh:
+            fh.write(self.AGREEMENT_HEADER + "\n" + agreements_rows)
+        call_command(
+            "import_profile_data",
+            companies=os.path.join(d, "companies.csv"),
+            agreements=os.path.join(d, "agreements.csv"),
+            verbosity=0,
+            **kwargs,
+        )
+
+    def test_parse_date_invalid_and_empty(self):
+        from companies.management.commands.import_profile_data import parse_date
+
+        self.assertIsNone(parse_date(""))
+        self.assertIsNone(parse_date("not-a-date"))
+        self.assertEqual(parse_date("2021-10-20").isoformat(), "2021-10-20")
+
+    def test_invalid_website_email_and_scheme_prefix(self):
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "code": "C1",
+                "name_ar": "شركة ألف", "nationality": "1", "website": "a.com",
+            })
+            + self._row(self.COMPANY_COLS, {
+                "id": "2", "company_type": "emtiaz", "code": "C2",
+                "name_ar": "شركة باء", "nationality": "1", "website": "http://",
+            })
+            + self._row(self.COMPANY_COLS, {
+                "id": "3", "company_type": "emtiaz", "code": "C3",
+                "name_ar": "شركة جيم", "nationality": "1", "email": "bad-email",
+            }),
+        )
+        self.assertEqual(Company.objects.get(name_ar="شركة ألف").website, "http://a.com")
+        self.assertEqual(Company.objects.get(name_ar="شركة باء").website, "")
+        self.assertEqual(Company.objects.get(name_ar="شركة جيم").email, "")
+
+    def test_empty_company_name_skipped(self):
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": "",
+            }),
+        )
+        self.assertEqual(Company.objects.count(), 0)
+
+    def test_unknown_company_type_skipped(self):
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "unknown_kind", "name_ar": "شركة مجهولة",
+            }),
+        )
+        self.assertFalse(Company.objects.filter(name_ar="شركة مجهولة").exists())
+
+    def test_placeholder_unknown_kind_skipped(self):
+        self._run(
+            "",
+            self._row(self.AGREEMENT_COLS, {
+                "id": "1", "شركة": "شركة غير موجودة", "نوع الشركة": "نوع مجهول",
+                "رقم الاتفاقية/العقد": "SM-1",
+            }),
+        )
+        self.assertEqual(Company.objects.count(), 0)
+        self.assertEqual(Agreement.objects.count(), 0)
+
+    def test_company_type_filter_and_agreement_mismatch(self):
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": "شركة استكشاف",
+            })
+            + self._row(self.COMPANY_COLS, {
+                "id": "2", "company_type": "entaj", "name_ar": "شركة إنتاج",
+            }),
+            self._row(self.AGREEMENT_COLS, {
+                "id": "1", "شركة": "شركة إنتاج", "نوع الشركة": "امتياز منتجة",
+                "رقم الاتفاقية/العقد": "SK-1",
+            })
+            + self._row(self.AGREEMENT_COLS, {
+                "id": "2", "شركة": "شركة استكشاف", "نوع الشركة": "امتياز استكشاف",
+                "رقم الاتفاقية/العقد": "SK-2",
+            }),
+            company_type="production",
+        )
+        self.assertTrue(Company.objects.filter(name_ar="شركة إنتاج").exists())
+        self.assertFalse(Company.objects.filter(name_ar="شركة استكشاف").exists())
+        self.assertTrue(Agreement.objects.filter(agreement_no="SK-1").exists())
+        self.assertFalse(Agreement.objects.filter(agreement_no="SK-2").exists())
+
+    def test_missing_files_raise_command_error(self):
+        from django.core.management.base import CommandError
+
+        d = tempfile.mkdtemp()
+        with self.assertRaises(CommandError):
+            call_command(
+                "import_profile_data",
+                companies=os.path.join(d, "nope.csv"),
+                agreements=os.path.join(d, "also.csv"),
+            )
+
+    def test_nationality_name_updated(self):
+        Nationality.objects.create(code="1", name_ar="قديم")
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": "شركة ألف",
+                "nationality": "1",
+            }),
+        )
+        self.assertEqual(Nationality.objects.get(code="1").name_ar, "سودانية")
+
+    def test_agreement_without_no_warns(self):
+        buf = io.StringIO()
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": "شركة ألف",
+            }),
+            self._row(self.AGREEMENT_COLS, {
+                "id": "1", "شركة": "شركة ألف", "نوع الشركة": "امتياز استكشاف",
+            }),
+            stdout=buf,
+        )
+        self.assertIn("has no رقم", buf.getvalue())
+
+    def test_company_full_clean_failure_counts_failed(self):
+        long_name = "ط" * 250
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": long_name,
+            }),
+        )
+        self.assertFalse(Company.objects.filter(name_ar=long_name).exists())
+
+    def test_agreement_full_clean_failure_counts_failed(self):
+        long_no = "SK-" + ("x" * 100)
+        self._run(
+            self._row(self.COMPANY_COLS, {
+                "id": "1", "company_type": "emtiaz", "name_ar": "شركة ألف",
+            }),
+            self._row(self.AGREEMENT_COLS, {
+                "id": "1", "شركة": "شركة ألف", "نوع الشركة": "امتياز استكشاف",
+                "رقم الاتفاقية/العقد": long_no,
+            }),
+        )
+        self.assertFalse(Agreement.objects.filter(agreement_no=long_no).exists())

@@ -2,7 +2,7 @@ import csv
 import re
 from pathlib import Path
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from applications.models import ApplicationType, EventCategory
 from companies.models import CompanyType, contract_type_options

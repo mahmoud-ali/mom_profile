@@ -1,9 +1,14 @@
+import io
+from datetime import timedelta
+
 from django import forms as django_forms
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import Client, TestCase
 from django.urls import reverse
+from unittest import mock
 
 from companies.models import (
     Agreement,
@@ -18,13 +23,15 @@ from companies.models import (
 from django.utils import timezone
 
 from .forms import build_application_form
-from .kpis import compute_kpis
+from .kpis import _summarize, compute_kpis, format_duration
 from .models import (
     Application,
+    ApplicationAttachment,
     ApplicationDetail,
     ApplicationDetailField,
     ApplicationField,
     ApplicationStatus,
+    ApplicationTransition,
     ApplicationType,
     Recommendation,
 )
@@ -1815,3 +1822,567 @@ class CommitteeSlideshowTests(TestCase):
         response = client.get(self._slideshow_url(index=999))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "الطلب 1 من 1")
+
+    def test_non_numeric_index_defaults_to_zero(self):
+        self._under_processing()
+        client = Client()
+        client.force_login(self.manager)
+        response = client.get(self._slideshow_url(index="abc"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "الطلب 1 من 1")
+
+    def test_post_with_stale_app_warns(self):
+        self._under_processing()
+        draft = Application.objects.create(
+            agreement=self.agreement, app_type=self.work_plan
+        )
+        client = Client()
+        client.force_login(self.manager)
+        response = client.post(
+            self._slideshow_url(index=0),
+            {
+                "app_pk": draft.pk,
+                "index": "0",
+                "committee_recommendation": "recommended",
+                "committee_recommendation_notes": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "لم يعد قيد المعالجة")
+
+    def test_details_rendered(self):
+        app = self._under_processing()
+        detail = ApplicationDetail.objects.create(application=app, category="معدات", order=0)
+        ApplicationDetailField.objects.create(detail=detail, label="الوزن", value="10")
+        client = Client()
+        client.force_login(self.manager)
+        response = client.get(self._slideshow_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "معدات")
+        self.assertContains(response, "10")
+
+    def test_post_permission_denied_shows_error(self):
+        app = self._under_processing()
+        client = Client()
+        client.force_login(self.manager)
+        with mock.patch.object(
+            Application,
+            "transition_status",
+            side_effect=PermissionDenied("ليست لديك صلاحية"),
+        ):
+            response = client.post(
+                self._slideshow_url(index=0),
+                {
+                    "app_pk": app.pk,
+                    "index": "0",
+                    "committee_recommendation": "recommended",
+                    "committee_recommendation_notes": "",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "ليست لديك صلاحية")
+
+
+class ApplicationKpisCommandTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        call_command("create_roles")
+        cls.entry = User.objects.create_user(username="kpis_cmd_entry", password="x")
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
+        cls.company = Company.objects.create(
+            name_ar="شركة مؤشرات", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+        app = Application.objects.create(agreement=cls.agreement, app_type=cls.work_plan)
+        app.transition_status(ApplicationStatus.SUBMITTED, cls.entry)
+        app.save()
+
+    def test_command_prints_kpis(self):
+        buf = io.StringIO()
+        call_command("application_kpis", stdout=buf)
+        out = buf.getvalue()
+        self.assertIn("Total applications", out)
+        self.assertIn("Stage durations", out)
+
+    def test_command_with_days_window(self):
+        buf = io.StringIO()
+        call_command("application_kpis", days=30, stdout=buf)
+        self.assertIn("last 30 days", buf.getvalue())
+
+
+class FormatDurationTests(TestCase):
+    def test_format_duration_branches(self):
+        self.assertEqual(format_duration(None), "—")
+        self.assertEqual(format_duration(0), "—")
+        self.assertEqual(format_duration(2 * 86400 + 3 * 3600), "2 يوم 3 ساعة")
+        self.assertEqual(format_duration(2 * 3600 + 5 * 60), "2 ساعة 5 دقيقة")
+        self.assertEqual(format_duration(7 * 60), "7 دقيقة")
+        self.assertEqual(format_duration(42), "42 ثانية")
+
+
+class KpisFunctionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        call_command("create_roles")
+        cls.entry = User.objects.create_user(username="kpis_fn_entry", password="x")
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
+        cls.company = Company.objects.create(
+            name_ar="شركة دوال", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def test_summarize_empty(self):
+        self.assertIsNone(_summarize([]))
+
+    def test_compute_kpis_days_filter(self):
+        app = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        Application.objects.filter(pk=app.pk).update(
+            created_at=timezone.now() - timedelta(days=10)
+        )
+        self.assertEqual(compute_kpis(days=5)["total"], 0)
+        self.assertEqual(compute_kpis(days=30)["total"], 1)
+
+    def test_compute_kpis_falls_back_to_working_seconds(self):
+        app = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        ApplicationTransition.objects.create(
+            application=app,
+            from_status=ApplicationStatus.DRAFT,
+            to_status=ApplicationStatus.SUBMITTED,
+            user=None,
+            duration_seconds=None,
+        )
+        kpis = compute_kpis()
+        self.assertIn(("مسودة", "مؤكد"), kpis["stage_durations"])
+
+
+class LoadAppTypesEdgeTests(TestCase):
+    def test_company_type_arg(self):
+        call_command("load_app_types", company_type="exploration")
+        self.assertEqual(
+            ApplicationType.objects.filter(company_type=CompanyType.EXPLORATION).count(), 23
+        )
+
+    def test_unknown_company_type_raises(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            call_command("load_app_types", company_type="bogus")
+
+    def test_csv_arg(self):
+        call_command("load_app_types", csv="apps_emtiaz.csv")
+        self.assertEqual(
+            ApplicationType.objects.filter(company_type=CompanyType.EXPLORATION).count(), 23
+        )
+
+    def test_unknown_csv_raises(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            call_command("load_app_types", csv="nope.csv")
+
+    def test_missing_csv_continues(self):
+        import tempfile
+        from pathlib import Path
+
+        from applications.management.commands import load_app_types as la_mod
+
+        with mock.patch.object(la_mod, "PROJECT_ROOT", Path(tempfile.mkdtemp())):
+            call_command("load_app_types", csv="apps_emtiaz.csv")
+
+    def test_empty_model_name_skipped_and_csv_loaded(self):
+        import tempfile
+        from pathlib import Path
+
+        from applications.management.commands import load_app_types as la_mod
+
+        d = Path(tempfile.mkdtemp())
+        (d / "apps_emtiaz.csv").write_text(
+            "url_name,model_name,verbose_name,arabic_name,attachments_arabic,"
+            "form_fields_arabic,detail_models_arabic,detail_fields_arabic\n"
+            ",,Empty Row,اسم فارغ,,,,\n"
+            ",AppTestOne,Test One,اختبار واحد,,حقل واحد,,,\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(la_mod, "PROJECT_ROOT", d):
+            call_command("load_app_types", csv="apps_emtiaz.csv")
+        self.assertTrue(
+            ApplicationType.objects.filter(
+                company_type=CompanyType.EXPLORATION, model_name="AppTestOne"
+            ).exists()
+        )
+        self.assertFalse(ApplicationType.objects.filter(model_name="").exists())
+
+
+class ApplicationTypeFormLegacyEventTests(TestCase):
+    def test_legacy_event_label_kept_editable(self):
+        from applications.admin import ApplicationTypeForm
+
+        at = ApplicationType.objects.create(
+            company_type=CompanyType.EXPLORATION,
+            model_name="LegacyModel",
+            verbose_name="legacy",
+            arabic_name="legacy",
+            event_category="legal",
+            event_label="some_legacy_value",
+        )
+        form = ApplicationTypeForm(instance=at)
+        self.assertIn("some_legacy_value", [v for v, _ in form.fields["event_label"].choices])
+
+
+class AdminTransitionHistoryTests(TestCase):
+    def test_transition_history_empty_for_unsaved(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        self.assertEqual(ma.transition_history(Application()), "—")
+
+    def test_transition_history_empty_when_no_transitions(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        call_command("load_app_types")
+        company = Company.objects.create(
+            name_ar="شركة تاريخ", company_type=CompanyType.EXPLORATION
+        )
+        agreement = Agreement.objects.create(company=company)
+        work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+        app = Application.objects.create(agreement=agreement, app_type=work_plan)
+        app.transitions.all().delete()
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        self.assertEqual(ma.transition_history(app), "—")
+
+
+class AdminDeleteQuerysetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        call_command("create_roles")
+        cls.user = User.objects.create_user(username="delq", password="x", is_staff=True)
+        assign_role(cls.user, "technical_data_entry", company_types=["exploration"])
+        cls.company = Company.objects.create(
+            name_ar="شركة حذف", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def test_delete_queryset_restricts_to_draft_for_non_superuser(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        draft = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        submitted = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        submitted.transition_status(ApplicationStatus.SUBMITTED, self.user)
+        submitted.save()
+
+        class Req:
+            pass
+
+        req = Req()
+        req.user = self.user
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        ma.delete_queryset(req, Application.objects.filter(pk__in=[draft.pk, submitted.pk]))
+        self.assertFalse(Application.objects.filter(pk=draft.pk).exists())
+        self.assertTrue(Application.objects.filter(pk=submitted.pk).exists())
+
+
+class AdminSaveModelTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        cls.company = Company.objects.create(
+            name_ar="شركة حفظ", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def test_add_page_rejects_non_draft_status(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        class FakeForm:
+            cleaned_data = {"status": ApplicationStatus.SUBMITTED}
+
+        class Req:
+            pass
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        obj = Application(
+            agreement=self.agreement, app_type=self.work_plan, status=ApplicationStatus.SUBMITTED
+        )
+        with self.assertRaises(PermissionDenied):
+            ma.save_model(Req(), obj, FakeForm(), change=False)
+
+
+class AdminSaveDynamicTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        cls.company = Company.objects.create(
+            name_ar="شركة ديناميكية", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+        cls.samples = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppSendSamplesForAnalysis"
+        )
+
+    def test_save_dynamic_stores_attachment(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        app = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+
+        class FakeForm:
+            fields = {}
+            cleaned_data = {"a_0": SimpleUploadedFile("plan.pdf", b"data"), "a_1": None}
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        ma._save_dynamic(app, FakeForm())
+        self.assertEqual(
+            {a.label for a in app.attachments.all()}, {"خطاب رسمي من الشركة"}
+        )
+
+    def test_save_dynamic_skips_empty_detail_rows(self):
+        from django.contrib import admin as dj_admin
+
+        from applications.admin import ApplicationAdmin
+
+        app = Application.objects.create(agreement=self.agreement, app_type=self.samples)
+
+        class FakeForm:
+            fields = {"dt_0_cat": None, "dt_0_0": None, "dt_0_1": None}
+            cleaned_data = {"dt_0_cat": "", "dt_0_0": "", "dt_0_1": ""}
+
+        ma = ApplicationAdmin(Application, dj_admin.site)
+        ma._save_dynamic(app, FakeForm())
+        self.assertEqual(app.details.count(), 0)
+
+
+class BuildFormEdgeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        cls.company = Company.objects.create(
+            name_ar="شركة نماذج", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def test_make_field_decimal_and_char_fallback(self):
+        from .forms import _make_field
+
+        self.assertIsInstance(
+            _make_field("مبلغ", spec={"type": "decimal"}), django_forms.DecimalField
+        )
+        self.assertIsInstance(_make_field("حقل قصير"), django_forms.CharField)
+        field = _make_field("حقل طويل يتجاوز خمسة وعشرين حرفاً بوضوح تام جدا")
+        self.assertIsInstance(field.widget, django_forms.Textarea)
+
+    def test_append_existing_select_value(self):
+        from .forms import _append_existing_select_value
+
+        field = django_forms.ChoiceField(choices=[("a", "A")])
+        _append_existing_select_value(field, "legacy")
+        self.assertIn("legacy", [v for v, _ in field.choices])
+
+    def test_form_with_invalid_agreement_data_falls_back(self):
+        Form = build_application_form(self.work_plan, instance=None)
+        form = Form(data={
+            "agreement": "not-an-int",
+            "app_type": "",
+            "status": ApplicationStatus.DRAFT,
+            "notes": "",
+        })
+        self.assertIsNotNone(form)
+
+    def test_clean_adds_workflow_entry_errors(self):
+        app = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        Form = build_application_form(self.work_plan, instance=app)
+        cases = [
+            (ApplicationStatus.COMMITTEE_RECOMMENDATION, "committee_recommendation"),
+            (ApplicationStatus.UNDERSECRETARY_RECOMMENDATION, "undersecretary_recommendation"),
+            (ApplicationStatus.APPROVED, "minister_decision"),
+        ]
+        for target, field_name in cases:
+            form = Form(data={
+                "agreement": str(self.agreement.pk),
+                "app_type": str(self.work_plan.pk),
+                "status": ApplicationStatus.DRAFT,
+                "notes": "",
+                "_transition_to": target,
+            })
+            self.assertFalse(form.is_valid(), field_name)
+            self.assertIn(field_name, form.errors, field_name)
+
+
+class TemplateFilterTests(TestCase):
+    def test_dict_get_none(self):
+        from applications.templatetags.app_fields import dict_get
+
+        self.assertIsNone(dict_get(None, "x"))
+
+
+class ModelStrAndCleanTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        call_command("create_roles")
+        cls.entry = User.objects.create_user(username="mstr_entry", password="x")
+        assign_role(cls.entry, "technical_data_entry", company_types=["exploration"])
+        cls.company = Company.objects.create(
+            name_ar="شركة نصوص", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+        cls.app = Application.objects.create(agreement=cls.agreement, app_type=cls.work_plan)
+
+    def test_working_hours_clean_and_str(self):
+        from datetime import date, time
+
+        from applications.models import WorkingHoursSchedule
+
+        sch = WorkingHoursSchedule(
+            name="افتراضي",
+            start_date=date(2020, 1, 1),
+            end_date=date(2019, 1, 1),
+            work_start=time(8, 0),
+            work_end=time(16, 0),
+        )
+        with self.assertRaises(ValidationError):
+            sch.full_clean()
+        sch.end_date = None
+        self.assertEqual(str(sch), "افتراضي (2020-01-01 - …)")
+
+    def test_clean_list(self):
+        from applications.models import _clean_list
+
+        self.assertEqual(_clean_list(None), [])
+        self.assertEqual(_clean_list(""), [])
+        self.assertEqual(_clean_list("a، b,c"), ["a", "b", "c"])
+
+    def test_can_transition_to_wrapper(self):
+        self.assertTrue(self.app.can_transition_to(ApplicationStatus.SUBMITTED, self.entry))
+        self.assertFalse(self.app.can_transition_to(ApplicationStatus.APPROVED, self.entry))
+
+    def test_attachment_str(self):
+        att = ApplicationAttachment.objects.create(
+            application=self.app, label="", file="attachments/2025/01/x.pdf"
+        )
+        self.assertIn("attachments/2025/01/x.pdf", str(att))
+        att.label = "مرفق"
+        att.save()
+        self.assertTrue(str(att).startswith("مرفق"))
+
+    def test_field_str(self):
+        f = ApplicationField.objects.create(application=self.app, label="حقل", value="قيمة")
+        self.assertEqual(str(f), "حقل: قيمة")
+
+    def test_detail_str(self):
+        detail = ApplicationDetail.objects.create(application=self.app, category="معدات", order=0)
+        self.assertTrue(str(detail).startswith("معدات:"))
+        detail.category = ""
+        detail.save()
+        self.assertFalse(str(detail).startswith(":"))
+
+    def test_detail_field_str(self):
+        detail = ApplicationDetail.objects.create(application=self.app, category="", order=0)
+        f = ApplicationDetailField.objects.create(detail=detail, label="الوزن", value="10")
+        self.assertEqual(str(f), "الوزن: 10")
+
+
+class LogApprovalEventEdgeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("load_app_types")
+        cls.company = Company.objects.create(
+            name_ar="شركة أحداث", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.work_plan = ApplicationType.objects.get(
+            company_type=CompanyType.EXPLORATION, model_name="AppWorkPlan"
+        )
+
+    def test_no_event_category_returns_silently(self):
+        from applications.workflow import log_approval_event
+
+        at = ApplicationType.objects.create(
+            company_type=CompanyType.EXPLORATION,
+            model_name="NoEventType",
+            verbose_name="no event",
+            arabic_name="no event",
+        )
+        app = Application.objects.create(agreement=self.agreement, app_type=at)
+        log_approval_event(app)
+        self.assertFalse(TechnicalEvent.objects.filter(application=app).exists())
+
+    def test_unknown_event_category_returns_silently(self):
+        from applications.workflow import log_approval_event
+
+        at = ApplicationType.objects.create(
+            company_type=CompanyType.EXPLORATION,
+            model_name="BadCategoryType",
+            verbose_name="bad",
+            arabic_name="bad",
+            event_category="bogus",
+            event_label="x",
+        )
+        app = Application.objects.create(agreement=self.agreement, app_type=at)
+        log_approval_event(app)
+        self.assertFalse(TechnicalEvent.objects.filter(application=app).exists())
+
+    def test_event_already_exists_is_idempotent(self):
+        from applications.workflow import log_approval_event
+
+        app = Application.objects.create(agreement=self.agreement, app_type=self.work_plan)
+        TechnicalEvent.objects.create(
+            agreement=self.agreement,
+            event_type="work_plan",
+            description="موجود",
+            application=app,
+        )
+        log_approval_event(app)
+        self.assertEqual(TechnicalEvent.objects.filter(application=app).count(), 1)
+
+    def test_invalid_event_label_falls_back_to_other(self):
+        from applications.workflow import log_approval_event
+
+        at = ApplicationType.objects.create(
+            company_type=CompanyType.EXPLORATION,
+            model_name="BadLabelType",
+            verbose_name="bad label",
+            arabic_name="bad label",
+            event_category="technical",
+            event_label="not_a_valid_label",
+        )
+        app = Application.objects.create(agreement=self.agreement, app_type=at)
+        log_approval_event(app)
+        ev = TechnicalEvent.objects.get(application=app)
+        self.assertEqual(ev.event_type, "other")
