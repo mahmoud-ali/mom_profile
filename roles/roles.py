@@ -15,6 +15,7 @@ from applications.workflow import WORKFLOW_PERMISSION_CODENAMES
 
 TECHNICAL_DATA_ENTRY = "technical_data_entry"
 FINANCIAL_DATA_ENTRY = "financial_data_entry"
+LEGAL_DATA_ENTRY = "legal_data_entry"
 MANAGER = "manager"
 
 ROLE_DEFINITIONS = {
@@ -45,6 +46,24 @@ ROLE_DEFINITIONS = {
             "companies.financialevent": ["add", "change", "view"],
             "companies.agreement": ["view"],
             "companies.company": ["view"],
+        },
+    },
+    LEGAL_DATA_ENTRY: {
+        "arabic_name": "مدخل بيانات قانوني",
+        "description": (
+            "إدخال وتحديث بيانات الشركات والعقود (الاتفاقيات/الرخص) والأحداث القانونية "
+            "لجميع الشركات؛ لا صلاحيات على الطلبات أو المواقف الفنية/المالية أو كتالوج الإجراءات."
+        ),
+        "company_scoped": False,
+        "permissions": {
+            "companies.company": ["add", "change", "view"],
+            "companies.agreement": ["add", "change", "view"],
+            "companies.legalevent": ["add", "change", "view"],
+            "companies.block": ["view"],
+            "companies.state": ["view"],
+            "companies.locality": ["view"],
+            "companies.mineral": ["view"],
+            "companies.nationality": ["view"],
         },
     },
     MANAGER: {

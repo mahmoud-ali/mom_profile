@@ -233,22 +233,19 @@ class TechnicalPositionInline(admin.StackedInline):
 class LegalEventInline(admin.TabularInline):
     model = LegalEvent
     extra = 0
-    fields = ("event_type", "date", "description", "application")
-    readonly_fields = ("application",)
+    fields = ("event_type", "date", "description")
 
 
 class FinancialEventInline(admin.TabularInline):
     model = FinancialEvent
     extra = 0
-    fields = ("event_type", "date", "amount", "description", "application")
-    readonly_fields = ("application",)
+    fields = ("event_type", "date", "amount", "description")
 
 
 class TechnicalEventInline(admin.TabularInline):
     model = TechnicalEvent
     extra = 0
-    fields = ("event_type", "category", "date", "description", "application")
-    readonly_fields = ("application",)
+    fields = ("event_type", "category", "date", "description")
 
 
 class ApplicationInline(admin.TabularInline):
@@ -310,6 +307,10 @@ class LegalEventAdmin(admin.ModelAdmin):
     list_display = ("agreement", "event_type", "date", "application")
     list_filter = ("event_type",)
     search_fields = ("agreement__company__name_ar", "description")
+    autocomplete_fields = ("agreement",)
+    # The linked application (الطلب المرتبط) is set automatically by the
+    # workflow on approval; it is hidden from the form (kept in list_display).
+    exclude = ("application",)
 
 
 @admin.register(FinancialEvent)
@@ -318,6 +319,7 @@ class FinancialEventAdmin(admin.ModelAdmin):
     list_filter = ("event_type",)
     search_fields = ("agreement__company__name_ar", "description")
     autocomplete_fields = ("agreement",)
+    exclude = ("application",)
 
 
 @admin.register(TechnicalEvent)
@@ -326,3 +328,4 @@ class TechnicalEventAdmin(CompanyTypeScopedAdminMixin, admin.ModelAdmin):
     list_filter = ("event_type",)
     search_fields = ("agreement__company__name_ar", "description", "category")
     autocomplete_fields = ("agreement",)
+    exclude = ("application",)

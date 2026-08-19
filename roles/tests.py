@@ -11,7 +11,9 @@ from companies.models import (
     Agreement,
     Company,
     CompanyType,
+    FinancialEvent,
     FinancialPosition,
+    LegalEvent,
     Locality,
     State,
     TechnicalEvent,
@@ -106,6 +108,7 @@ class CreateRolesTests(TestCase):
 
         tech = Group.objects.get(name="technical_data_entry")
         fin = Group.objects.get(name="financial_data_entry")
+        legal = Group.objects.get(name="legal_data_entry")
         mgr = Group.objects.get(name="manager")
 
         tech_perms = _codenames(tech)
@@ -150,6 +153,40 @@ class CreateRolesTests(TestCase):
         )
         self.assertFalse(
             any("application" in p or "applicationtype" in p for p in fin_perms)
+        )
+
+        legal_perms = _codenames(legal)
+        self.assertTrue(
+            {
+                "add_company",
+                "change_company",
+                "view_company",
+                "add_agreement",
+                "change_agreement",
+                "view_agreement",
+                "add_legalevent",
+                "change_legalevent",
+                "view_legalevent",
+                "view_block",
+                "view_state",
+                "view_locality",
+                "view_mineral",
+                "view_nationality",
+            }
+            <= legal_perms
+        )
+        self.assertFalse(
+            legal_perms
+            & {"delete_company", "delete_agreement", "delete_legalevent"}
+        )
+        self.assertFalse(
+            any(
+                "application" in p
+                or "applicationtype" in p
+                or "financial" in p
+                or "technical" in p
+                for p in legal_perms
+            )
         )
 
         mgr_perms = _codenames(mgr)
@@ -637,6 +674,222 @@ class FinancialDataEntryTests(TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertContains(resp, "admin-autocomplete")
             self.assertContains(resp, "/admin/autocomplete/")
+
+
+class LegalDataEntryTests(TestCase):
+    """legal_data_entry adds/edits companies, agreements and legal events for all companies."""
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("create_roles")
+        cls.exp = Company.objects.create(
+            name_ar="شركة الاستكشاف", company_type=CompanyType.EXPLORATION
+        )
+        cls.prod = Company.objects.create(
+            name_ar="شركة الإنتاج", company_type=CompanyType.PRODUCTION
+        )
+        cls.exp_agr = Agreement.objects.create(company=cls.exp)
+        cls.prod_agr = Agreement.objects.create(company=cls.prod)
+        # state+locality so the agreement page exercises the locality branch
+        # of AgreementAdminForm.
+        state = State.objects.create(name_ar="ولاية قانونية", name_en="Legal State")
+        locality = Locality.objects.create(name_ar="محلية قانونية", state=state)
+        cls.exp_agr.state = state
+        cls.exp_agr.locality = locality
+        cls.exp_agr.save()
+        cls.exp_legal_event = LegalEvent.objects.create(
+            agreement=cls.exp_agr, event_type="extension", description="تمديد أ"
+        )
+        LegalEvent.objects.create(
+            agreement=cls.prod_agr, event_type="extension", description="تمديد ب"
+        )
+
+    def _legal_client(self):
+        user = _make_user("legal_admin", is_staff=True)
+        apply_role_to_user(user, "legal_data_entry")
+        client = Client()
+        client.force_login(user)
+        return client, user
+
+    def test_sees_and_edits_agreements_and_companies_for_all_companies(self):
+        client, _ = self._legal_client()
+        resp = client.get(reverse("admin:companies_agreement_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "شركة الاستكشاف")
+        self.assertContains(resp, "شركة الإنتاج")
+
+        resp = client.get(reverse("admin:companies_company_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "شركة الاستكشاف")
+        self.assertContains(resp, "شركة الإنتاج")
+
+        # add a new agreement for an existing company (the admin includes the
+        # legal-events inline for this role, so its formset management fields
+        # are required in the POST)
+        resp = client.post(
+            reverse("admin:companies_agreement_add"),
+            {
+                "company": self.exp.pk,
+                "contract_type": "concession",
+                "validity_status": "active",
+                "legal_events-TOTAL_FORMS": "0",
+                "legal_events-INITIAL_FORMS": "0",
+                "legal_events-MIN_NUM_FORMS": "0",
+                "legal_events-MAX_NUM_FORMS": "1000",
+                "_save": "حفظ",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            Agreement.objects.filter(company=self.exp, contract_type="concession").exists()
+        )
+
+        # add a new company (the admin includes the agreements inline for this
+        # role, so its formset management fields are required in the POST)
+        resp = client.post(
+            reverse("admin:companies_company_add"),
+            {
+                "name_ar": "شركة قانونية جديدة",
+                "company_type": "small",
+                "general_status": "green",
+                "agreements-TOTAL_FORMS": "0",
+                "agreements-INITIAL_FORMS": "0",
+                "agreements-MIN_NUM_FORMS": "0",
+                "agreements-MAX_NUM_FORMS": "1000",
+                "_save": "حفظ",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            Company.objects.filter(name_ar="شركة قانونية جديدة").exists()
+        )
+
+    def test_sees_and_edits_legal_events_for_all_companies(self):
+        client, _ = self._legal_client()
+        resp = client.get(reverse("admin:companies_legalevent_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        # the changelist shows the agreement and the event-type label, not the
+        # description column.
+        self.assertContains(resp, "شركة الاستكشاف")
+        self.assertContains(resp, "شركة الإنتاج")
+        self.assertContains(resp, "تمديد")
+        self.assertContains(resp, "2 الأحداث القانونية")
+
+        resp = client.post(
+            reverse("admin:companies_legalevent_add"),
+            {
+                "agreement": self.prod_agr.pk,
+                "event_type": "cancellation",
+                "date": "2026-01-01",
+                "description": "إلغاء جديد",
+                "_save": "حفظ",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            LegalEvent.objects.filter(
+                agreement=self.prod_agr, event_type="cancellation", description="إلغاء جديد"
+            ).exists()
+        )
+
+    def test_no_application_or_catalog_or_positions_access(self):
+        client, _ = self._legal_client()
+        for url_name in (
+            "admin:applications_application_changelist",
+            "admin:applications_applicationtype_changelist",
+            "admin:companies_technicalposition_changelist",
+            "admin:companies_financialposition_changelist",
+        ):
+            self.assertEqual(
+                client.get(reverse(url_name)).status_code,
+                403,
+                f"{url_name} should be forbidden for legal_data_entry",
+            )
+
+    def test_agreement_autocomplete_in_legal_forms(self):
+        client, _ = self._legal_client()
+        for url_name, args in (
+            ("admin:companies_legalevent_add", None),
+            ("admin:companies_legalevent_change", [self.exp_legal_event.pk]),
+        ):
+            resp = client.get(reverse(url_name, args=args))
+            self.assertEqual(resp.status_code, 200)
+            self.assertContains(resp, "admin-autocomplete")
+            self.assertContains(resp, "/admin/autocomplete/")
+
+    def test_agreement_autocomplete_endpoint(self):
+        # The agreement field is searchable server-side via autocomplete,
+        # filtered by the target admin (view permission + scoping).
+        client, _ = self._legal_client()
+        url = reverse("admin:autocomplete")
+        params = {
+            "app_label": "companies",
+            "model_name": "legalevent",  # source model owning the FK
+            "field_name": "agreement",
+            "term": "استكشاف",
+        }
+        resp = client.get(url, params)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            [int(r["id"]) for r in resp.json()["results"]], [self.exp_agr.pk]
+        )
+
+
+class EventFormFieldTests(TestCase):
+    """The linked-application field (الطلب المرتبط) is hidden from event forms.
+
+    The field is set automatically by the workflow on approval; it must not be
+    editable or visible in the add/change forms or the agreement-page inlines
+    (it stays in the changelist columns).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("create_roles")
+        cls.company = Company.objects.create(
+            name_ar="شركة الاختبار", company_type=CompanyType.EXPLORATION
+        )
+        cls.agreement = Agreement.objects.create(company=cls.company)
+        cls.legal_event = LegalEvent.objects.create(
+            agreement=cls.agreement, event_type="extension", description="حدث قانوني"
+        )
+        FinancialEvent.objects.create(
+            agreement=cls.agreement, event_type="claim", description="حدث مالي"
+        )
+        TechnicalEvent.objects.create(
+            agreement=cls.agreement, event_type="study", description="حدث فني"
+        )
+
+    def _admin_client(self):
+        admin = User.objects.create_superuser("su_eventfields", "f@f.com", "x")
+        client = Client()
+        client.force_login(admin)
+        return client
+
+    def test_standalone_event_forms_hide_application_field(self):
+        client = self._admin_client()
+        for url_name, args in (
+            ("admin:companies_legalevent_add", None),
+            ("admin:companies_financialevent_add", None),
+            ("admin:companies_technicalevent_add", None),
+            ("admin:companies_legalevent_change", [self.legal_event.pk]),
+        ):
+            resp = client.get(reverse(url_name, args=args))
+            self.assertEqual(resp.status_code, 200)
+            html = resp.content.decode("utf-8")
+            self.assertNotIn('name="application"', html, url_name)
+            self.assertNotIn('id="id_application"', html, url_name)
+
+    def test_agreement_change_page_hides_application_in_event_inlines(self):
+        client = self._admin_client()
+        resp = client.get(
+            reverse("admin:companies_agreement_change", args=[self.agreement.pk])
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode("utf-8")
+        self.assertNotIn("الطلب المرتبط", html)
+        for prefix in ("legal_events", "financial_events", "technical_events"):
+            self.assertNotIn(f'name="{prefix}-0-application"', html, prefix)
 
 
 class AssignmentPageTests(TestCase):

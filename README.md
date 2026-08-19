@@ -38,6 +38,10 @@ created/deleted only via create_roles.
   catalog (manager-only) or financial data.
 - financial_data_entry — adds/edits FinancialPosition and FinancialEvent for
   ALL companies; no application or catalog access.
+- legal_data_entry — adds/edits Company, Agreement (contract) and LegalEvent
+  records for ALL companies (reference dropdowns — block/state/locality/
+  mineral/nationality — are view-only); no applications, positions, other
+  events, or catalog access.
 - manager — advances the review pipeline and decides the outcome
   (مؤكد -> قيد المعالجة -> توصية اللجنة -> توصية وكيل الوزارة -> معتمد / مرفوض);
   each recommendation stage records a decision (موصى به / غير موصى به) plus
