@@ -122,7 +122,7 @@ def apply_role_to_user(user, role_name=None, company_types=None):
     if role_name and role_name not in ROLE_DEFINITIONS:
         raise ValueError("Unknown role: " + role_name)
     for managed in MANAGED_ROLES:
-        group = Group.objects.get(name=managed)
+        group, _ = Group.objects.get_or_create(name=managed)
         if managed == role_name:
             user.groups.add(group)
         else:
